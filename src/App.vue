@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   Bell,
   BarChart3,
@@ -68,8 +68,18 @@ import {
   ZoomIn,
   ZoomOut
 } from 'lucide-vue-next'
-import { paletteNodes, toolScores, traceSteps, workflowEdges, workflowNodes } from './mock/workflow.mock'
-import type { NodeStatus, WorkflowNode } from './types'
+import { api } from './api'
+import AgentsPage from './components/AgentsPage.vue'
+import AppSidebar from './components/AppSidebar.vue'
+import HomeAgentPage from './components/HomeAgentPage.vue'
+import KnowledgePage from './components/KnowledgePage.vue'
+import MemoryPage from './components/MemoryPage.vue'
+import SettingsPage from './components/SettingsPage.vue'
+import TemplatesPage from './components/TemplatesPage.vue'
+import ToolsPage from './components/ToolsPage.vue'
+import WorkflowPage from './components/WorkflowPage.vue'
+import { paletteNodes as initialPaletteNodes } from './mock/workflow.mock'
+import type { NodeStatus, PaletteNode, TraceStep, WorkflowEdge, WorkflowNode } from './types'
 
 type PageKey = 'home' | 'agent' | 'workflow' | 'template' | 'knowledge' | 'memory' | 'tools' | 'settings'
 
@@ -85,10 +95,30 @@ const pageFromHash = (): PageKey => {
 }
 
 const activePage = ref<PageKey>(pageFromHash())
-const activeNodeId = ref('extract')
+const activeNodeId = ref('')
 const inspectorTab = ref('explain')
 const traceTab = ref('node')
 const agentInput = ref('')
+const workflowId = ref<number | null>(null)
+const workflowTitle = ref('暂无工作流')
+const workflowDescription = ref('')
+const workflowNodes = ref<WorkflowNode[]>([])
+const workflowEdges = ref<WorkflowEdge[]>([])
+const traceSteps = ref<TraceStep[]>([])
+const paletteSearch = ref('')
+const workflowZoom = ref(100)
+const canvasMode = ref<'canvas' | 'config'>('canvas')
+const toolboxTab = ref<'nodes' | 'tools' | 'variables'>('nodes')
+const workflowStatus = ref<'idle' | 'saving' | 'running' | 'complete' | 'failed'>('idle')
+const savedAt = ref('--:--:--')
+const runOutput = ref('')
+const runError = ref('')
+const toastMessage = ref('')
+const apiOnline = ref(false)
+const chatMessages = ref<Array<{ id: number; role: 'user' | 'assistant'; text: string; time: string }>>([])
+const conversationStatus = ref('未开始')
+const conversationStartedAt = ref('-')
+const conversationLatency = ref('-')
 
 const iconMap = {
   Bell,
@@ -122,254 +152,702 @@ const navItems = [
   { id: 'settings', label: '设置', icon: Settings, page: 'settings' }
 ]
 
-const selectedNode = computed(() => workflowNodes.find((node) => node.id === activeNodeId.value) ?? workflowNodes[3])
+const emptyNode: WorkflowNode = {
+  id: '',
+  type: '',
+  label: '暂无节点',
+  subLabel: '数据库暂无工作流节点',
+  icon: 'Sparkles',
+  position: { x: 0, y: 0 },
+  status: 'idle',
+  tone: 'blue',
+  tool: '-',
+  confidence: 0,
+  reason: '数据库中还没有可展示的节点。'
+}
 
-const agentCards = [
-  { name: '财报分析助手', tag: '分析助手', icon: FileText, tone: 'green', model: 'Qwen3-32B', tools: 12, success: '95.2%', calls: '2,347', running: 2, online: true },
-  { name: '代码审查助手', tag: '开发助手', icon: Code2, tone: 'violet', model: 'DeepSeek-Coder', tools: 8, success: '93.1%', calls: '1,823', running: 1, online: false },
-  { name: '研究总结助手', tag: '研究助手', icon: ClipboardList, tone: 'blue', model: 'Qwen3-32B', tools: 10, success: '90.3%', calls: '1,256', running: 0, online: false },
-  { name: '市场调研助手', tag: '调研助手', icon: BarChart3, tone: 'amber', model: 'GLM-4-Plus', tools: 9, success: '94.6%', calls: '1,987', running: 2, online: true },
-  { name: '简历优化助手', tag: 'HR 助手', icon: Bot, tone: 'cyan', model: 'Qwen3-32B', tools: 7, success: '88.7%', calls: '932', running: 0, online: false },
-  { name: '知识问答助手', tag: '知识助手', icon: MessageSquarePlus, tone: 'violet', model: 'Qwen3-32B', tools: 6, success: '96.1%', calls: '3,451', running: 3, online: true }
-]
+const selectedNode = computed(() => workflowNodes.value.find((node) => node.id === activeNodeId.value) ?? workflowNodes.value[0] ?? emptyNode)
 
-const templateStats = [
-  { label: '全部模板', value: 28, icon: Grid2X2, tone: 'violet' },
-  { label: '官方模板', value: 12, icon: Star, tone: 'amber' },
-  { label: '我的模板', value: 8, icon: User, tone: 'blue' },
-  { label: '收藏模板', value: 5, icon: Heart, tone: 'pink' }
-]
-
-const templateCategories = ['全部', '数据分析', '内容创作', '编程开发', '文档处理', '研究学习', '办公效率', '其他']
-
-const templateCards = [
-  {
-    title: '财报分析助手',
-    badge: '官方',
-    badgeTone: 'violet',
-    desc: '自动解析财报文件，提取关键财务指标并生成分析报告',
-    steps: ['文件上传', '财报解析', '指标提取', '分析生成'],
-    tags: ['数据分析', '财务', '报告生成'],
-    views: '1.2k',
-    likes: 89,
-    author: 'TraceMind官方',
-    date: '2024-01-15',
-    starred: true,
-    tone: 'blue'
-  },
-  {
-    title: '论文阅读助手',
-    badge: '官方',
-    badgeTone: 'green',
-    desc: '上传论文PDF，提取关键信息并生成摘要和思维导图',
-    steps: ['PDF上传', '内容提取', '摘要生成', '思维导图'],
-    tags: ['研究学习', '论文', '摘要'],
-    views: '856',
-    likes: 67,
-    author: 'TraceMind官方',
-    date: '2024-01-14',
-    starred: false,
-    tone: 'green'
-  },
-  {
-    title: '代码审查助手',
-    badge: '热门',
-    badgeTone: 'orange',
-    desc: '自动分析代码质量，发现潜在问题并提供优化建议',
-    steps: ['代码输入', '静态分析', '问题检测', '建议生成'],
-    tags: ['编程开发', '代码审查', '质量检查'],
-    views: '2.1k',
-    likes: 156,
-    author: '社区用户',
-    date: '2024-01-13',
-    starred: false,
-    tone: 'violet'
-  },
-  {
-    title: '市场调研分析',
-    badge: '',
-    badgeTone: 'blue',
-    desc: '收集和分析市场信息，生成调研报告和趋势分析',
-    steps: ['数据收集', '数据清洗', '趋势分析', '报告生成'],
-    tags: ['数据分析', '市场调研', '趋势分析'],
-    views: '643',
-    likes: 45,
-    author: '社区用户',
-    date: '2024-01-12',
-    starred: false,
-    tone: 'blue'
-  },
-  {
-    title: '内容创作助手',
-    badge: '',
-    badgeTone: 'blue',
-    desc: '根据主题生成文章大纲、内容和优化建议',
-    steps: ['主题输入', '大纲生成', '内容创作', '优化建议'],
-    tags: ['内容创作', '写作', '优化'],
-    views: '1.8k',
-    likes: 123,
-    author: '社区用户',
-    date: '2024-01-11',
-    starred: false,
-    tone: 'green'
-  },
-  {
-    title: '会议纪要生成器',
-    badge: '',
-    badgeTone: 'blue',
-    desc: '自动转录会议内容，提取关键信息并生成会议纪要',
-    steps: ['音频上传', '语音转录', '要点提取', '纪要生成'],
-    tags: ['办公效率', '会议', '转录'],
-    views: '892',
-    likes: 78,
-    author: '社区用户',
-    date: '2024-01-10',
-    starred: false,
-    tone: 'blue'
-  },
-  {
-    title: '翻译助手',
-    badge: '',
-    badgeTone: 'blue',
-    desc: '多语言文档翻译，支持术语库和格式保持',
-    steps: ['文档上传', '文本识别', '翻译处理', '格式输出'],
-    tags: ['文档处理', '翻译', '多语言'],
-    views: '567',
-    likes: 34,
-    author: '社区用户',
-    date: '2024-01-09',
-    starred: false,
-    tone: 'violet'
-  },
-  {
-    title: '学习计划制定器',
-    badge: '',
-    badgeTone: 'blue',
-    desc: '根据学习目标和时间安排，生成个性化学习计划',
-    steps: ['目标设定', '能力评估', '计划生成', '进度跟踪'],
-    tags: ['研究学习', '学习计划', '个性化'],
-    views: '445',
-    likes: 29,
-    author: '社区用户',
-    date: '2024-01-08',
-    starred: false,
-    tone: 'cyan'
-  }
-]
-
-const knowledgeStats = [
-  { label: '知识库总数', value: '12', suffix: '个', delta: '+1', icon: BookOpen, tone: 'violet' },
-  { label: '文档数量', value: '1,284', suffix: '个', delta: '+28', icon: FileText, tone: 'green' },
-  { label: '向量片段', value: '3,256,789', suffix: '个', delta: '+56,213', icon: Layers, tone: 'amber' },
-  { label: '今日检索量', value: '12,845', suffix: '次', delta: '+8.2%', icon: BarChart3, tone: 'violet' }
-]
-
-const knowledgeBases = [
-  { name: '产品文档库', desc: '包含产品手册、功能说明、更新日志等官方文档', docs: 128, chunks: '326,541', updated: '2024-05-12 10:30', icon: FileText, tone: 'violet', active: true },
-  { name: '财报分析库', desc: '历年财报、财务分析报告及相关数据', docs: 86, chunks: '215,678', updated: '2024-05-10 16:45', icon: BarChart3, tone: 'green', active: false },
-  { name: '代码规范库', desc: '开发规范、接口文档、示例代码等', docs: 64, chunks: '128,934', updated: '2024-05-08 09:21', icon: Code2, tone: 'violet', active: false },
-  { name: '客户支持库', desc: '常见问题、解决方案、售后政策等', docs: 72, chunks: '98,732', updated: '2024-05-07 14:11', icon: MessageSquarePlus, tone: 'amber', active: false }
-]
-
-const knowledgeDocuments = [
-  { name: '产品手册.pdf', type: 'PDF', size: '2.4 MB', tone: 'red' },
-  { name: '功能更新日志.md', type: 'MD', size: '1.1 MB', tone: 'cyan' },
-  { name: '快速入门指南.pdf', type: 'PDF', size: '3.6 MB', tone: 'red' },
-  { name: 'API 接口说明.md', type: 'MD', size: '2.2 MB', tone: 'cyan' },
-  { name: '产品路线图.xlsx', type: 'XLSX', size: '1.8 MB', tone: 'green' }
-]
-
-const retrievalSnippets = [
-  { title: '2024Q1 财报摘要.pdf', text: '营业收入同比增长 12.8%，毛利率提升至 25.4%，现金流保持稳定。', score: 0.92 },
-  { title: '行业风险指标说明.md', text: '负债率、现金流覆盖倍数和存货周转率是财报风险分析的关键指标。', score: 0.86 },
-  { title: '财报分析模板.md', text: '建议按盈利能力、偿债能力、经营效率三个维度生成风险总结。', score: 0.81 }
-]
-
-const memoryStats = [
-  { label: '用户偏好', value: 36, desc: '记录你的偏好与习惯', icon: Heart, tone: 'pink' },
-  { label: '任务历史', value: 52, desc: '追踪任务与执行记录', icon: Clock, tone: 'amber' },
-  { label: '工具习惯', value: 18, desc: '记录常用工具与偏好', icon: Wrench, tone: 'green' }
-]
-
-const memoryItems = [
-  {
-    title: '用户偏好：喜欢表格化输出',
-    desc: '用户倾向于以表格形式查看结果，特别是在数据分析和对比汇总场景中。',
-    type: '偏好记忆',
-    level: '高',
-    tone: 'pink',
-    icon: Heart,
-    updated: '2025-05-15 10:24',
-    active: true
-  },
-  {
-    title: '任务历史：经常执行财报分析流程',
-    desc: '用户在过去30天内 12 次执行财报分析相关工作流程。',
-    type: '任务历史',
-    level: '高',
-    tone: 'amber',
-    icon: Clock,
-    updated: '2025-05-15 09:12',
-    active: false
-  },
-  {
-    title: '工具习惯：偏好 financial_extract_tool',
-    desc: '在财务数据提取场景中，用户优先使用 financial_extract_tool。',
-    type: '工具习惯',
-    level: '中',
-    tone: 'green',
-    icon: Wrench,
-    updated: '2025-05-14 16:45',
-    active: false
-  },
-  {
-    title: '用户偏好：喜欢简洁明了的回答',
-    desc: '用户更喜欢简洁、直接的回答，避免冗长的解释性内容。',
-    type: '偏好记忆',
-    level: '低',
-    tone: 'pink',
-    icon: Heart,
-    updated: '2025-05-13 11:08',
-    active: false
-  }
-]
-
-const memoryRefs = [
-  { icon: Heart, tone: 'pink', text: '用户偏好：喜欢表格化输出' },
-  { icon: Clock, tone: 'amber', text: '任务历史：经常执行财报分析流程' },
-  { icon: Wrench, tone: 'green', text: '工具习惯：偏好 financial_extract_tool' }
-]
-
-const toolStats = [
-  { label: '全部工具', value: '18', delta: '+2', icon: Box, tone: 'violet' },
-  { label: '启用工具', value: '15', delta: '+1', icon: CheckCircle, tone: 'green' },
-  { label: '禁用工具', value: '3', delta: '-1', icon: PauseCircle, tone: 'amber' },
-  { label: '平均成功率', value: '92.3%', delta: '+3.1%', icon: Activity, tone: 'blue' },
-  { label: '平均耗时', value: '1.42 s', delta: '-0.3s', icon: Clock, tone: 'violet' }
-]
+const agentCards = ref<any[]>([])
+const templateCards = ref<any[]>([])
+const knowledgeBases = ref<any[]>([])
+const knowledgeDocuments = ref<any[]>([])
+const retrievalSnippets = ref<any[]>([])
+const memoryItems = ref<any[]>([])
 
 const toolCategories = ['全部', '数据处理', '内容生成', '代码开发', '检索搜索', '分析计算', '其他']
 
-const toolRows = [
-  { name: 'pdf_parse_tool', version: 'v1.2.0', type: '数据处理', desc: '解析PDF文件内容，提取文本和结构化信息', enabled: true, success: '96.2%', latency: '1.23 s', calls: '2,341', icon: FileText, tone: 'violet', trend: 'up' },
-  { name: 'financial_extract_tool', version: 'v1.1.0', type: '数据分析', desc: '从财报文本中提取关键财务指标', enabled: true, success: '92.5%', latency: '1.87 s', calls: '1,892', icon: BarChart3, tone: 'green', trend: 'up' },
-  { name: 'risk_summary_tool', version: 'v1.0.3', type: '数据分析', desc: '基于财务数据生成风险分析与总结', enabled: true, success: '91.3%', latency: '2.34 s', calls: '1,256', icon: ShieldCheck, tone: 'amber', trend: 'up' },
-  { name: 'code_review_tool', version: 'v1.3.1', type: '代码开发', desc: '分析代码质量、安全性并提供优化建议', enabled: true, success: '94.1%', latency: '2.15 s', calls: '1,734', icon: Code2, tone: 'blue', trend: 'up' },
-  { name: 'summary_tool', version: 'v1.0.2', type: '内容生成', desc: '对长文本进行摘要总结', enabled: true, success: '95.0%', latency: '1.05 s', calls: '3,214', icon: FileText, tone: 'pink', trend: 'up' },
-  { name: 'knowledge_search_tool', version: 'v1.2.0', type: '检索搜索', desc: '在知识库中检索相关内容', enabled: true, success: '90.2%', latency: '0.98 s', calls: '4,532', icon: Search, tone: 'cyan', trend: 'up' },
-  { name: 'table_output_tool', version: 'v1.0.1', type: '内容生成', desc: '将数据整理为结构化表格', enabled: true, success: '93.7%', latency: '0.76 s', calls: '2,105', icon: Grid2X2, tone: 'pink', trend: 'up' },
-  { name: 'translate_tool', version: 'v1.1.0', type: '其他', desc: '多语言翻译工具', enabled: false, success: '88.4%', latency: '1.66 s', calls: '932', icon: Languages, tone: 'gray', trend: 'down' }
-]
+const toolRows = ref<any[]>([])
 
-const outputJson = `{
-  "status": "success",
-  "data": {
-    "revenue": "1200.50",
-    "net_profit": "200.30",
-    "debt_ratio": "0.45",
-    "gross_margin": "0.25"
+const templateSearch = ref('')
+const activeTemplateCategory = ref('全部')
+const toolSearch = ref('')
+const activeToolCategory = ref('全部')
+const activeToolStatus = ref<'全部状态' | '启用' | '禁用'>('全部状态')
+const memorySearch = ref('')
+const activeMemoryType = ref('全部')
+const knowledgeSearch = ref('')
+const activeKnowledgeId = ref<string | number>('')
+const agentSearch = ref('')
+const selectedAgentName = ref('')
+const settingsForm = ref({
+  language: '简体中文',
+  model: 'GPT-4o',
+  theme: '跟随系统',
+  autoSave: true,
+  interval: '5 分钟',
+  webhook: '',
+  modelProvider: 'OpenAI',
+  temperature: '0.7',
+  maxTokens: '4096',
+  memoryEnabled: true,
+  memoryLimit: '5',
+  memoryScope: '全部工作流',
+  auditLog: true,
+  allowExport: true,
+  ipAllowlist: ''
+})
+
+const settingOptions = {
+  language: ['简体中文', 'English'],
+  model: ['GPT-4o', 'Qwen3-32B', 'DeepSeek-Coder', 'mock-workflow-generator'],
+  theme: ['跟随系统', '浅色', '深色'],
+  interval: ['1 分钟', '5 分钟', '10 分钟', '30 分钟'],
+  modelProvider: ['OpenAI', '通义千问', 'DeepSeek', '本地模型'],
+  temperature: ['0.2', '0.7', '1.0'],
+  maxTokens: ['2048', '4096', '8192', '16384'],
+  memoryLimit: ['3', '5', '10', '20'],
+  memoryScope: ['全部工作流', '仅当前工作流', '关闭跨任务引用']
+}
+
+const filteredPaletteNodes = computed(() => {
+  const keyword = paletteSearch.value.trim().toLowerCase()
+  if (!keyword) return initialPaletteNodes
+  return initialPaletteNodes.filter((node) => matchesText(keyword, node.label, node.desc, node.type))
+})
+
+const selectedTraceStep = computed(() => {
+  return traceSteps.value.find((step) => step.nodeId === activeNodeId.value) ?? traceSteps.value[0]
+})
+
+const selectedMemory = computed(() => memoryItems.value.find((item) => item.active) ?? memoryItems.value[0])
+const selectedKnowledgeBase = computed(() => knowledgeBases.value.find((kb) => kb.active) ?? knowledgeBases.value[0])
+const selectedAgent = computed(() => agentCards.value.find((agent) => agent.name === selectedAgentName.value) ?? agentCards.value[0])
+const relatedTools = computed(() => toolRows.value.filter((tool) => tool.name !== selectedNode.value.tool).slice(0, 3))
+const agentAvgSuccess = computed(() => {
+  const values = agentCards.value.map((agent) => Number(String(agent.success).replace('%', ''))).filter(Number.isFinite)
+  return values.length ? `${(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)}` : '0'
+})
+const agentTotalCalls = computed(() => {
+  return agentCards.value.reduce((sum, agent) => sum + Number(String(agent.calls).replace(/,/g, '')), 0).toLocaleString('zh-CN')
+})
+const recentTasks = computed(() => traceSteps.value.map((step) => ({
+  name: step.stepName,
+  time: step.time,
+  status: statusLabel(step.status)
+})))
+
+const templateStats = computed(() => [
+  { label: '全部模板', value: templateCards.value.length, icon: Grid2X2, tone: 'violet' },
+  { label: '官方模板', value: templateCards.value.filter((item) => item.badge === '官方' || item.tags.includes('官方')).length, icon: Star, tone: 'amber' },
+  { label: '我的模板', value: templateCards.value.filter((item) => item.author !== 'TraceMind官方').length, icon: User, tone: 'blue' },
+  { label: '收藏模板', value: templateCards.value.filter((item) => item.starred).length, icon: Heart, tone: 'pink' }
+])
+
+const templateCategories = computed(() => ['全部', ...Array.from(new Set(templateCards.value.flatMap((item) => item.tags))).filter(Boolean)])
+
+const knowledgeStats = computed(() => [
+  { label: '知识库总数', value: String(knowledgeBases.value.length), suffix: '个', delta: '0', icon: BookOpen, tone: 'violet' },
+  { label: '文档数量', value: knowledgeBases.value.reduce((sum, item) => sum + Number(item.docs ?? 0), 0).toLocaleString('zh-CN'), suffix: '个', delta: '0', icon: FileText, tone: 'green' },
+  { label: '向量片段', value: knowledgeBases.value.reduce((sum, item) => sum + Number(String(item.chunks ?? 0).replace(/,/g, '')), 0).toLocaleString('zh-CN'), suffix: '个', delta: '0', icon: Layers, tone: 'amber' },
+  { label: '今日检索量', value: String(retrievalSnippets.value.length), suffix: '次', delta: '0', icon: BarChart3, tone: 'violet' }
+])
+
+const memoryStats = computed(() => [
+  { label: '用户偏好', value: memoryItems.value.filter((item) => item.type === '偏好记忆').length, desc: '数据库记录数量', icon: Heart, tone: 'pink' },
+  { label: '任务历史', value: memoryItems.value.filter((item) => item.type === '任务历史').length, desc: '数据库记录数量', icon: Clock, tone: 'amber' },
+  { label: '工具习惯', value: memoryItems.value.filter((item) => item.type === '工具习惯').length, desc: '数据库记录数量', icon: Wrench, tone: 'green' }
+])
+
+const memoryRefs = computed(() => memoryItems.value.slice(0, 3).map((item) => ({ icon: item.icon, tone: item.tone, text: item.title })))
+
+const toolStats = computed(() => {
+  const successRates = toolRows.value.map((tool) => Number(String(tool.success).replace('%', ''))).filter(Number.isFinite)
+  const avgSuccess = successRates.length ? `${(successRates.reduce((sum, value) => sum + value, 0) / successRates.length).toFixed(1)}%` : '0%'
+  return [
+    { label: '全部工具', value: String(toolRows.value.length), delta: '0', icon: Box, tone: 'violet' },
+    { label: '启用工具', value: String(toolRows.value.filter((tool) => tool.enabled).length), delta: '0', icon: CheckCircle, tone: 'green' },
+    { label: '禁用工具', value: String(toolRows.value.filter((tool) => !tool.enabled).length), delta: '0', icon: PauseCircle, tone: 'amber' },
+    { label: '平均成功率', value: avgSuccess, delta: '0', icon: Activity, tone: 'blue' },
+    { label: '平均耗时', value: toolRows.value[0]?.latency ?? '0 ms', delta: '0', icon: Clock, tone: 'violet' }
+  ]
+})
+
+const filteredTemplates = computed(() => {
+  const keyword = templateSearch.value.trim().toLowerCase()
+  return templateCards.value.filter((item) => {
+    const inCategory = activeTemplateCategory.value === '全部' || item.tags.includes(activeTemplateCategory.value)
+    const inSearch = !keyword || matchesText(keyword, item.title, item.desc, item.tags.join(' '))
+    return inCategory && inSearch
+  })
+})
+
+const filteredTools = computed(() => {
+  const keyword = toolSearch.value.trim().toLowerCase()
+  return toolRows.value.filter((tool) => {
+    const normalizedType = tool.type === '数据分析' ? '分析计算' : tool.type
+    const inCategory = activeToolCategory.value === '全部' || normalizedType === activeToolCategory.value
+    const inStatus =
+      activeToolStatus.value === '全部状态' ||
+      (activeToolStatus.value === '启用' && tool.enabled) ||
+      (activeToolStatus.value === '禁用' && !tool.enabled)
+    const inSearch = !keyword || matchesText(keyword, tool.name, tool.desc, tool.type)
+    return inCategory && inStatus && inSearch
+  })
+})
+
+const filteredMemories = computed(() => {
+  const keyword = memorySearch.value.trim().toLowerCase()
+  return memoryItems.value.filter((item) => {
+    const inType = activeMemoryType.value === '全部' || item.type === activeMemoryType.value
+    const inSearch = !keyword || matchesText(keyword, item.title, item.desc, item.type)
+    return inType && inSearch
+  })
+})
+
+const filteredKnowledgeBases = computed(() => {
+  const keyword = knowledgeSearch.value.trim().toLowerCase()
+  if (!keyword) return knowledgeBases.value
+  return knowledgeBases.value.filter((kb) => matchesText(keyword, kb.name, kb.desc))
+})
+
+const filteredAgents = computed(() => {
+  const keyword = agentSearch.value.trim().toLowerCase()
+  if (!keyword) return agentCards.value
+  return agentCards.value.filter((agent) => matchesText(keyword, agent.name, agent.tag, agent.model))
+})
+
+const workflowPayload = computed(() => ({
+  id: workflowId.value ?? undefined,
+  name: workflowTitle.value,
+  description: workflowDescription.value,
+  sourceType: 'manual',
+  intent: 'financial_report_analysis',
+  confidence: 0.94,
+  status: 'draft',
+  nodes: workflowNodes.value,
+  edges: workflowEdges.value
+}))
+
+function matchesText(keyword: string, ...values: Array<string | number | undefined | null>) {
+  return values.some((value) => String(value ?? '').toLowerCase().includes(keyword))
+}
+
+function notify(message: string) {
+  toastMessage.value = message
+  window.setTimeout(() => {
+    if (toastMessage.value === message) toastMessage.value = ''
+  }, 2200)
+}
+
+function timeNow() {
+  return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+}
+
+function shortDate(value?: string) {
+  if (!value) return '刚刚'
+  return value.slice(0, 10)
+}
+
+function formatMs(value: unknown) {
+  const ms = Number(value ?? 0)
+  if (!Number.isFinite(ms) || ms <= 0) return '0 ms'
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`
+}
+
+function iconForTool(name: string) {
+  if (name.includes('pdf') || name.includes('summary') || name.includes('output')) return FileText
+  if (name.includes('financial') || name.includes('risk')) return BarChart3
+  if (name.includes('knowledge') || name.includes('search')) return Search
+  if (name.includes('code')) return Code2
+  if (name.includes('translate')) return Languages
+  return Wrench
+}
+
+function toneForIndex(index: number) {
+  return ['violet', 'green', 'amber', 'blue', 'cyan'][index % 5]
+}
+
+function normalizeWorkflow(workflow: any) {
+  workflowId.value = Number(workflow.id ?? workflowId.value ?? 0) || null
+  workflowTitle.value = workflow.name ?? workflowTitle.value
+  workflowDescription.value = workflow.description ?? workflowDescription.value
+  workflowNodes.value = Array.isArray(workflow.nodes) ? workflow.nodes : []
+  workflowEdges.value = Array.isArray(workflow.edges) ? workflow.edges : []
+  activeNodeId.value = workflowNodes.value[0]?.id ?? ''
+}
+
+function mapTool(row: any, index: number) {
+  return {
+    id: row.id,
+    name: row.name ?? row.display_name ?? `tool_${index + 1}`,
+    version: row.version ?? 'v1.0.0',
+    type: row.category ?? '其他',
+    desc: row.description ?? '暂无描述',
+    enabled: Boolean(row.enabled),
+    success: `${Number(row.success_rate ?? 0).toFixed(1)}%`,
+    latency: formatMs(row.avg_latency_ms),
+    calls: Number(row.call_count ?? 0).toLocaleString('zh-CN'),
+    icon: iconForTool(String(row.name ?? '')),
+    tone: toneForIndex(index),
+    trend: row.enabled ? 'up' : 'down'
   }
-}`
+}
+
+function mapTemplate(row: any, index: number) {
+  const workflowJson = row.workflow_json ?? {}
+  const tags = [row.category ?? '其他', row.is_official ? '官方' : '社区'].filter(Boolean)
+  return {
+    id: row.id,
+    title: row.title ?? `模板 ${index + 1}`,
+    badge: row.badge ?? (row.is_official ? '官方' : ''),
+    badgeTone: row.is_official ? 'violet' : 'blue',
+    desc: row.description ?? '暂无描述',
+    steps: Array.isArray(workflowJson?.steps) ? workflowJson.steps : ['需求输入', '流程生成', '工具执行', '结果输出'],
+    tags,
+    views: String(row.view_count ?? 0),
+    likes: Number(row.like_count ?? 0),
+    author: row.is_official ? 'TraceMind官方' : '社区用户',
+    date: shortDate(row.updated_at ?? row.created_at),
+    starred: Number(row.starred_count ?? 0) > 0,
+    tone: toneForIndex(index)
+  }
+}
+
+function mapKnowledgeBase(row: any, index: number) {
+  return {
+    id: row.id,
+    name: row.name ?? `知识库 ${index + 1}`,
+    desc: row.description ?? '暂无描述',
+    docs: Number(row.document_count ?? 0),
+    chunks: Number(row.chunk_count ?? 0).toLocaleString('zh-CN'),
+    updated: row.updated_at ?? '刚刚',
+    icon: index % 2 === 0 ? FileText : BarChart3,
+    tone: toneForIndex(index),
+    active: index === 0,
+    embeddingModel: row.embedding_model ?? '-',
+    chunkSize: row.chunk_size ?? 800,
+    chunkOverlap: row.chunk_overlap ?? 120,
+    retrievalMode: row.retrieval_mode ?? 'hybrid',
+    topK: row.top_k ?? 5,
+    status: row.status ?? 'normal',
+    createdAt: row.created_at ?? '-'
+  }
+}
+
+function mapMemory(row: any, index: number) {
+  const typeMap: Record<string, string> = {
+    preference: '偏好记忆',
+    task_history: '任务历史',
+    tool_preference: '工具习惯'
+  }
+  const toneMap: Record<string, string> = {
+    preference: 'pink',
+    task_history: 'amber',
+    tool_preference: 'green'
+  }
+  const iconMapByType: Record<string, any> = {
+    preference: Heart,
+    task_history: Clock,
+    tool_preference: Wrench
+  }
+  return {
+    id: row.id,
+    title: row.title ?? `记忆 ${index + 1}`,
+    desc: row.content ?? '暂无内容',
+    type: typeMap[row.memory_type] ?? row.memory_type ?? '普通记忆',
+    level: row.importance === 'high' ? '高' : row.importance === 'low' ? '低' : '中',
+    tone: toneMap[row.memory_type] ?? 'green',
+    icon: iconMapByType[row.memory_type] ?? FileText,
+    updated: row.updated_at ?? '刚刚',
+    active: index === 0,
+    enabled: Boolean(row.enabled),
+    createdAt: row.created_at ?? '-',
+    sourceType: row.source_type ?? '-'
+  }
+}
+
+function applySettings(row: any) {
+  if (!row) return
+  const extra = row.settings_json ?? row.settingsJson ?? {}
+  const interval = (row.auto_save_interval ?? row.autoSaveInterval ?? Number(settingsForm.value.interval.replace(/\D/g, ''))) || 5
+  settingsForm.value = {
+    ...settingsForm.value,
+    ...extra,
+    language: row.language === 'zh-CN' ? '简体中文' : row.language === 'en-US' ? 'English' : settingsForm.value.language,
+    model: row.default_model ?? row.defaultModel ?? settingsForm.value.model,
+    theme: row.theme === 'system' ? '跟随系统' : row.theme === 'light' ? '浅色' : row.theme === 'dark' ? '深色' : row.theme ?? settingsForm.value.theme,
+    autoSave: Boolean(row.auto_save ?? row.autoSave ?? settingsForm.value.autoSave),
+    interval: `${interval} 分钟`,
+    webhook: row.webhook_url ?? row.webhookUrl ?? settingsForm.value.webhook
+  }
+}
+
+async function loadBackendData() {
+  try {
+    const [workflows, tools, templates, bases, memories, settings] = await Promise.all([
+      api.listWorkflows(),
+      api.listTools(),
+      api.listTemplates(),
+      api.listKnowledgeBases(),
+      api.listMemories(),
+      api.listSettings()
+    ])
+    apiOnline.value = true
+    applySettings(settings)
+    if (workflows[0]) {
+      const latest = workflows[0].workflowJson?.nodes ? workflows[0].workflowJson : workflows[0]
+      normalizeWorkflow({ ...latest, id: workflows[0].id, name: workflows[0].name, description: workflows[0].description })
+    } else {
+      workflowId.value = null
+      workflowTitle.value = '暂无工作流'
+      workflowDescription.value = ''
+      workflowNodes.value = []
+      workflowEdges.value = []
+      traceSteps.value = []
+      activeNodeId.value = ''
+    }
+    toolRows.value = tools.map(mapTool)
+    templateCards.value = templates.map(mapTemplate)
+    knowledgeBases.value = bases.map(mapKnowledgeBase)
+    activeKnowledgeId.value = knowledgeBases.value[0]?.id ?? knowledgeBases.value[0]?.name ?? ''
+    memoryItems.value = memories.map(mapMemory)
+    agentCards.value = workflows.map((workflow, index) => ({
+      name: workflow.name,
+      tag: workflow.intent ?? '工作流',
+      icon: Workflow,
+      tone: toneForIndex(index),
+      model: settingsForm.value.model,
+      tools: Array.isArray(workflow.workflowJson?.nodes) ? workflow.workflowJson.nodes.length : 0,
+      success: `${Math.round(Number(workflow.confidence ?? 0) * 100)}%`,
+      calls: '0',
+      running: 0,
+      online: true
+    }))
+    selectedAgentName.value = agentCards.value[0]?.name ?? ''
+    notify('已连接后端数据')
+  } catch {
+    apiOnline.value = false
+    workflowId.value = null
+    workflowTitle.value = '后端未连接'
+    workflowDescription.value = ''
+    workflowNodes.value = []
+    workflowEdges.value = []
+    traceSteps.value = []
+    toolRows.value = []
+    templateCards.value = []
+    knowledgeBases.value = []
+    memoryItems.value = []
+    agentCards.value = []
+    notify('后端未连接，暂无数据库内容可展示')
+  }
+}
+
+async function saveWorkflow() {
+  workflowStatus.value = 'saving'
+  try {
+    if (workflowId.value) {
+      await api.updateWorkflow(workflowId.value, workflowPayload.value)
+    }
+    savedAt.value = timeNow()
+    workflowStatus.value = 'complete'
+    notify(workflowId.value ? '工作流已保存到后端' : '当前工作流已本地保存')
+  } catch (error) {
+    workflowStatus.value = 'failed'
+    notify(error instanceof Error ? error.message : '保存失败')
+  }
+}
+
+async function generateWorkflowFromInput(query?: string) {
+  const prompt = (query ?? agentInput.value).trim() || '帮我分析这份财报并总结风险'
+  try {
+    const workflow = await api.generateWorkflow(prompt)
+    apiOnline.value = true
+    normalizeWorkflow(workflow)
+    workflowStatus.value = 'idle'
+    setPage('workflow')
+    notify('已根据输入生成工作流')
+  } catch {
+    notify('后端未连接，无法从数据库生成工作流')
+  }
+}
+
+async function runWorkflowNow() {
+  workflowStatus.value = 'running'
+  runError.value = ''
+  workflowNodes.value = workflowNodes.value.map((node) => ({ ...node, status: 'idle' }))
+
+  for (const node of workflowNodes.value) {
+    workflowNodes.value = workflowNodes.value.map((item) => (item.id === node.id ? { ...item, status: 'running' } : item))
+    activeNodeId.value = node.id
+    await new Promise((resolve) => window.setTimeout(resolve, 120))
+    workflowNodes.value = workflowNodes.value.map((item) => (item.id === node.id ? { ...item, status: 'success' } : item))
+  }
+
+  try {
+    if (!workflowId.value) {
+      const generated = await api.generateWorkflow(workflowTitle.value)
+      normalizeWorkflow(generated)
+    }
+    const result = await api.runWorkflow(workflowId.value as number, { query: workflowTitle.value, files: [{ filename: 'demo_financial_report.pdf' }] })
+    runOutput.value = JSON.stringify(result.output ?? result, null, 2)
+    if (result.runId) traceSteps.value = await api.getTrace(result.runId)
+    apiOnline.value = true
+    workflowStatus.value = result.status === 'failed' ? 'failed' : 'complete'
+    runError.value = result.errorMessage ?? ''
+    notify(result.status === 'failed' ? '运行完成，但有失败节点' : '工作流运行完成')
+  } catch (error) {
+    workflowStatus.value = 'failed'
+    runOutput.value = ''
+    notify(error instanceof Error ? error.message : '运行失败')
+  }
+}
+
+function addPaletteNode(node: PaletteNode) {
+  const id = `${node.type}-${Date.now().toString(36).slice(-4)}`
+  const x = 120 + (workflowNodes.value.length % 4) * 160
+  const y = 120 + Math.floor(workflowNodes.value.length / 4) * 120
+  workflowNodes.value = [
+    ...workflowNodes.value,
+    {
+      id,
+      type: node.type,
+      label: node.label,
+      subLabel: node.desc,
+      icon: node.icon,
+      position: { x, y },
+      status: 'idle',
+      tone: node.tone,
+      tool: node.type === 'search' ? 'knowledge_search_tool' : node.type === 'llm' ? 'summary_llm' : 'user_input',
+      confidence: 0.76,
+      reason: `从工具库添加“${node.label}”，用于扩展当前工作流。`
+    }
+  ]
+  activeNodeId.value = id
+  workflowStatus.value = 'idle'
+}
+
+function addCustomNode() {
+  addPaletteNode({
+    type: 'custom',
+    label: '自定义节点',
+    desc: '手动配置工具和输入输出',
+    icon: 'Sparkles',
+    category: '自定义',
+    tone: 'violet'
+  })
+}
+
+function zoomCanvas(delta: number) {
+  workflowZoom.value = Math.min(150, Math.max(60, workflowZoom.value + delta))
+}
+
+function resetCanvas() {
+  workflowZoom.value = 100
+  activeNodeId.value = workflowNodes.value[0]?.id ?? activeNodeId.value
+}
+
+function exportWorkflow() {
+  navigator.clipboard?.writeText(JSON.stringify(workflowPayload.value, null, 2))
+  notify('工作流 JSON 已复制')
+}
+
+function shareWorkflow() {
+  navigator.clipboard?.writeText(`${window.location.origin}${window.location.pathname}#workflow`)
+  notify('分享链接已复制')
+}
+
+function sendAgentMessage() {
+  const text = agentInput.value.trim()
+  if (!text) return
+  const userMessage = { id: Date.now(), role: 'user' as const, text, time: timeNow().slice(0, 5) }
+  chatMessages.value = [...chatMessages.value, userMessage]
+  agentInput.value = ''
+  conversationStatus.value = '运行中'
+  window.setTimeout(() => {
+    chatMessages.value = [
+      ...chatMessages.value,
+      {
+        id: Date.now() + 1,
+        role: 'assistant' as const,
+        text: `已收到：${text}\n\n当前页面只展示数据库返回的数据。若需要生成工作流，请先确认后端和数据库可用。`,
+        time: timeNow().slice(0, 5)
+      }
+    ]
+    conversationStatus.value = '已完成'
+    conversationLatency.value = '1.28s'
+  }, 500)
+}
+
+function clearConversation() {
+  chatMessages.value = []
+  conversationStatus.value = '空会话'
+  notify('会话已清空')
+}
+
+function newConversation() {
+  clearConversation()
+  conversationStartedAt.value = new Date().toLocaleString('zh-CN', { hour12: false })
+}
+
+function toggleTemplateStar(item: any) {
+  item.starred = !item.starred
+  item.likes += item.starred ? 1 : -1
+}
+
+async function useTemplateCard(item: any) {
+  if (item.id) {
+    try {
+      await api.useTemplate(item.id)
+    } catch {
+      // Local interaction still proceeds when backend is unavailable.
+    }
+  }
+  await generateWorkflowFromInput(item.title)
+}
+
+async function refreshTools() {
+  try {
+    const tools = await api.listTools()
+    toolRows.value = tools.map(mapTool)
+    apiOnline.value = true
+    notify('工具列表已刷新')
+  } catch {
+    toolRows.value = []
+    notify('后端未连接，暂无工具数据')
+  }
+}
+
+async function toggleTool(tool: any) {
+  tool.enabled = !tool.enabled
+  if (tool.id) {
+    try {
+      const updated = await api.toggleTool(tool.id)
+      Object.assign(tool, mapTool(updated, toolRows.value.indexOf(tool)))
+    } catch {
+      notify('已本地切换工具状态')
+    }
+  }
+}
+
+function cycleToolStatus() {
+  activeToolStatus.value = activeToolStatus.value === '全部状态' ? '启用' : activeToolStatus.value === '启用' ? '禁用' : '全部状态'
+}
+
+function selectMemory(item: any) {
+  memoryItems.value = memoryItems.value.map((memory) => ({ ...memory, active: memory === item }))
+}
+
+async function addMemoryItem() {
+  try {
+    await api.createMemory({
+      memoryType: 'preference',
+      title: '前端交互偏好',
+      content: '用户希望前端只展示数据库真实内容，不再显示本地 mock 数据。',
+      importance: 'medium',
+      importanceScore: 3,
+      enabled: true
+    })
+    await loadBackendData()
+    notify('记忆已写入数据库')
+  } catch {
+    notify('后端未连接，无法新增记忆')
+  }
+}
+
+function selectKnowledgeBase(kb: any) {
+  activeKnowledgeId.value = kb.id ?? kb.name
+  knowledgeBases.value = knowledgeBases.value.map((item) => ({ ...item, active: item === kb }))
+}
+
+async function searchSelectedKnowledge() {
+  const kb = selectedKnowledgeBase.value
+  if (!kb?.id) {
+    notify('请选择一个后端知识库后再检索')
+    return
+  }
+  try {
+    const results = await api.searchKnowledgeBase(kb.id, workflowTitle.value)
+    retrievalSnippets.value = results.map((item, index) => ({
+      title: `片段 ${item.chunk_index ?? index + 1}`,
+      text: item.content ?? '',
+      score: 1
+    }))
+    notify(`检索到 ${results.length} 条片段`)
+  } catch {
+    retrievalSnippets.value = []
+    notify('后端未连接，无法检索数据库片段')
+  }
+}
+
+async function createKnowledgeBase() {
+  try {
+    await api.createKnowledgeBase({
+      name: `知识库 ${knowledgeBases.value.length + 1}`,
+      description: '通过前端创建的知识库',
+      embeddingModel: 'mock-embedding-v1',
+      chunkSize: 800,
+      chunkOverlap: 120,
+      retrievalMode: 'hybrid',
+      topK: 5
+    })
+    await loadBackendData()
+    notify('知识库已写入数据库')
+  } catch {
+    notify('后端未连接，无法新建知识库')
+  }
+}
+
+function selectAgent(agent: any) {
+  selectedAgentName.value = agent.name
+}
+
+function enterAgent(agent: any) {
+  selectAgent(agent)
+  setPage('home')
+}
+
+function switchAgent() {
+  if (!filteredAgents.value.length) return
+  const currentIndex = filteredAgents.value.findIndex((agent) => agent.name === selectedAgentName.value)
+  selectedAgentName.value = filteredAgents.value[(currentIndex + 1) % filteredAgents.value.length]?.name ?? selectedAgentName.value
+}
+
+function createAgent() {
+  notify('智能体列表来自数据库工作流，请先生成或保存工作流')
+}
+
+async function saveSettings() {
+  try {
+    const themeMap: Record<string, string> = {
+      跟随系统: 'system',
+      浅色: 'light',
+      深色: 'dark'
+    }
+    await api.saveSettings({
+      language: settingsForm.value.language === '简体中文' ? 'zh-CN' : 'en-US',
+      default_model: settingsForm.value.model,
+      theme: themeMap[settingsForm.value.theme] ?? settingsForm.value.theme,
+      auto_save: settingsForm.value.autoSave ? 1 : 0,
+      auto_save_interval: Number(settingsForm.value.interval.replace(/\D/g, '')) || 5,
+      webhook_url: settingsForm.value.webhook,
+      settings_json: settingsForm.value
+    })
+    notify('设置已保存到后端')
+  } catch {
+    notify('设置已本地保存')
+  }
+}
 
 function iconFor(name: string) {
   return iconMap[name as keyof typeof iconMap] ?? Sparkles
@@ -398,906 +876,147 @@ function setPage(page: PageKey) {
   activePage.value = page
   window.location.hash = page
 }
+
+onMounted(() => {
+  void loadBackendData()
+})
 </script>
 
 <template>
   <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <span class="brand-mark"><span></span></span>
-        <span>TraceMind</span>
-      </div>
-      <button class="new-chat">
-        <Plus :size="18" />
-        新建对话
-      </button>
+    <AppSidebar :active-page="activePage" :nav-items="navItems" @navigate="setPage($event as PageKey)" />
 
-      <nav class="nav-list">
-        <button
-          v-for="item in navItems"
-          :key="item.id"
-          class="nav-item"
-          :class="{ active: item.page === activePage }"
-          @click="setPage(item.page as PageKey)"
-        >
-          <component :is="item.icon" :size="19" />
-          <span>{{ item.label }}</span>
-        </button>
-      </nav>
+    <WorkflowPage
+      v-if="activePage === 'workflow'"
+      v-model:active-node-id="activeNodeId"
+      v-model:inspector-tab="inspectorTab"
+      v-model:trace-tab="traceTab"
+      v-model:palette-search="paletteSearch"
+      v-model:canvas-mode="canvasMode"
+      v-model:toolbox-tab="toolboxTab"
+      :workflow-title="workflowTitle"
+      :workflow-id="workflowId"
+      :workflow-nodes="workflowNodes"
+      :workflow-edges="workflowEdges"
+      :trace-steps="traceSteps"
+      :filtered-palette-nodes="filteredPaletteNodes"
+      :selected-node="selectedNode"
+      :selected-trace-step="selectedTraceStep"
+      :selected-knowledge-base="selectedKnowledgeBase"
+      :retrieval-snippets="retrievalSnippets"
+      :related-tools="relatedTools"
+      :workflow-zoom="workflowZoom"
+      :workflow-status="workflowStatus"
+      :saved-at="savedAt"
+      :run-output="runOutput"
+      :run-error="runError"
+      :api-online="apiOnline"
+      :icon-for="iconFor"
+      :status-label="statusLabel"
+      :edge-path="edgePath"
+      @save="saveWorkflow"
+      @run="runWorkflowNow"
+      @export="exportWorkflow"
+      @share="shareWorkflow"
+      @generate="generateWorkflowFromInput(workflowTitle)"
+      @zoom="zoomCanvas"
+      @reset="resetCanvas"
+      @add-custom-node="addCustomNode"
+      @add-palette-node="addPaletteNode"
+      @search-knowledge="searchSelectedKnowledge"
+    />
 
-      <div class="history">
-        <div class="history-title">
-          <span>历史会话</span>
-          <Clock3 :size="15" />
-        </div>
-        <div class="history-search">
-          <Search :size="15" />
-          <span>搜索历史会话</span>
-        </div>
-        <div class="history-card active">
-          <strong>财报风险分析助手</strong>
-          <span>今天 17:30</span>
-        </div>
-        <div class="history-card"><strong>论文阅读总结</strong><span>今天 16:20</span></div>
-        <div class="history-card"><strong>代码审查助手</strong><span>昨天 15:10</span></div>
-        <div class="history-card"><strong>市场调研分析</strong><span>05-20 14:30</span></div>
-        <div class="history-card"><strong>简历优化助手</strong><span>05-19 11:20</span></div>
-      </div>
+    <HomeAgentPage
+      v-else-if="activePage === 'home'"
+      v-model:agent-input="agentInput"
+      :chat-messages="chatMessages"
+      :conversation-status="conversationStatus"
+      :conversation-started-at="conversationStartedAt"
+      :conversation-latency="conversationLatency"
+      :model="settingsForm.model"
+      @new-conversation="newConversation"
+      @share="shareWorkflow"
+      @generate="generateWorkflowFromInput()"
+      @send="sendAgentMessage"
+      @clear="clearConversation"
+      @navigate="setPage"
+    />
 
-      <button class="collapse-btn">
-        <ChevronDown :size="17" />
-        收起侧边栏
-      </button>
-    </aside>
+    <SettingsPage
+      v-else-if="activePage === 'settings'"
+      v-model:form="settingsForm"
+      :options="settingOptions"
+      @save="saveSettings"
+    />
 
-    <main v-if="activePage === 'workflow'" class="main-workspace">
-      <header class="topbar">
-        <div class="title-wrap">
-          <Workflow :size="18" />
-          <h1>财报风险分析助手</h1>
-          <Code2 :size="15" />
-        </div>
-        <div class="top-actions">
-          <div class="saved-pill"><CheckCircle2 :size="17" /> 已自动保存 17:30:45</div>
-          <button><Save :size="17" />保存</button>
-          <button><Play :size="17" />运行</button>
-          <button><Upload :size="17" />导出</button>
-          <button class="share"><Share2 :size="17" />分享</button>
-          <MoreVertical :size="20" class="muted-icon" />
-          <div class="avatar">Z</div>
-        </div>
-      </header>
+    <ToolsPage
+      v-else-if="activePage === 'tools'"
+      v-model:tool-search="toolSearch"
+      v-model:active-tool-category="activeToolCategory"
+      :tool-stats="toolStats"
+      :tool-categories="toolCategories"
+      :active-tool-status="activeToolStatus"
+      :filtered-tools="filteredTools"
+      @cycle-tool-status="cycleToolStatus"
+      @refresh="refreshTools"
+      @notify="notify"
+      @toggle-tool="toggleTool"
+    />
 
-      <section class="studio">
-        <aside class="toolbox panel">
-          <h2>工具库</h2>
-          <div class="mini-tabs">
-            <button class="active">节点</button>
-            <button>工具</button>
-            <button>变量</button>
-          </div>
-          <label class="search-box">
-            <Search :size="16" />
-            <input placeholder="搜索节点" />
-          </label>
-          <p class="section-label">常用节点</p>
-          <div class="palette-list">
-            <button v-for="node in paletteNodes" :key="node.type" class="palette-card">
-              <span class="palette-icon" :class="node.tone">
-                <component :is="iconFor(node.icon)" :size="19" />
-              </span>
-              <span>
-                <strong>{{ node.label }}</strong>
-                <small>{{ node.desc }}</small>
-              </span>
-            </button>
-          </div>
-          <button class="custom-node"><Plus :size="17" /> 添加自定义节点</button>
-        </aside>
+    <MemoryPage
+      v-else-if="activePage === 'memory'"
+      v-model:memory-search="memorySearch"
+      v-model:active-memory-type="activeMemoryType"
+      :memory-stats="memoryStats"
+      :filtered-memories="filteredMemories"
+      :selected-memory="selectedMemory"
+      :memory-refs="memoryRefs"
+      @add-memory="addMemoryItem"
+      @select-memory="selectMemory"
+    />
 
-        <section class="canvas-column">
-          <div class="canvas-tabs">
-            <button class="active">工作流画布</button>
-            <button>流程配置</button>
-          </div>
+    <KnowledgePage
+      v-else-if="activePage === 'knowledge'"
+      v-model:knowledge-search="knowledgeSearch"
+      :knowledge-stats="knowledgeStats"
+      :filtered-knowledge-bases="filteredKnowledgeBases"
+      :selected-knowledge-base="selectedKnowledgeBase"
+      :knowledge-documents="knowledgeDocuments"
+      :retrieval-snippets="retrievalSnippets"
+      @create-knowledge-base="createKnowledgeBase"
+      @notify="notify"
+      @select-knowledge-base="selectKnowledgeBase"
+    />
 
-          <div class="canvas panel">
-            <div class="canvas-toolbar">
-              <button><Sparkles :size="17" /></button>
-              <button><ZoomIn :size="16" /></button>
-              <button><ZoomOut :size="16" /></button>
-              <button><Maximize2 :size="16" /></button>
-              <button><Plus :size="16" /></button>
-              <span>100%</span>
-              <ChevronDown :size="15" />
-            </div>
+    <TemplatesPage
+      v-else-if="activePage === 'template'"
+      v-model:template-search="templateSearch"
+      v-model:active-template-category="activeTemplateCategory"
+      :template-stats="templateStats"
+      :template-categories="templateCategories"
+      :filtered-templates="filteredTemplates"
+      @notify="notify"
+      @toggle-template-star="toggleTemplateStar"
+      @use-template="useTemplateCard"
+      @create-blank="generateWorkflowFromInput('创建一个空白工作流模板')"
+    />
 
-            <svg class="edges" width="1120" height="560" viewBox="0 0 1120 560">
-              <template v-for="edge in workflowEdges" :key="edge.id">
-                <path
-                  :d="edgePath(workflowNodes.find((n) => n.id === edge.source)!, workflowNodes.find((n) => n.id === edge.target)!)"
-                  class="edge-path"
-                />
-              </template>
-            </svg>
-
-            <button
-              v-for="node in workflowNodes"
-              :key="node.id"
-              class="flow-node"
-              :class="[node.tone, node.status, { selected: activeNodeId === node.id }]"
-              :style="{ left: `${node.position.x}px`, top: `${node.position.y}px` }"
-              @click="activeNodeId = node.id"
-            >
-              <span class="connector left"></span>
-              <span class="node-title">
-                <component :is="iconFor(node.icon)" :size="16" />
-                {{ node.label }}
-              </span>
-              <span class="node-sub">{{ node.subLabel }}</span>
-              <span class="connector right"></span>
-            </button>
-
-            <div class="minimap">
-              <div class="mini-content">
-                <span v-for="node in workflowNodes" :key="node.id" :style="{ left: `${node.position.x / 8}px`, top: `${node.position.y / 8}px` }"></span>
-              </div>
-            </div>
-
-            <div class="zoom-stack">
-              <button>+</button>
-              <button>-</button>
-              <button><Home :size="14" /></button>
-              <button><Maximize2 :size="14" /></button>
-            </div>
-          </div>
-
-          <section class="trace-panel panel">
-            <div class="trace-head">
-              <h3>执行轨迹</h3>
-              <span><CheckCircle2 :size="15" /> 运行完成</span>
-            </div>
-            <div class="trace-grid">
-              <div class="timeline">
-                <button
-                  v-for="step in traceSteps"
-                  :key="step.id"
-                  :class="{ active: step.nodeId === activeNodeId }"
-                  @click="step.nodeId && (activeNodeId = step.nodeId)"
-                >
-                  <CheckCircle2 :size="15" />
-                  <span>{{ step.stepName }}</span>
-                  <small>{{ step.time }}</small>
-                </button>
-              </div>
-              <div class="trace-detail">
-                <div class="trace-tabs">
-                  <button :class="{ active: traceTab === 'node' }" @click="traceTab = 'node'">节点日志</button>
-                  <button :class="{ active: traceTab === 'input' }" @click="traceTab = 'input'">输入数据</button>
-                  <button :class="{ active: traceTab === 'output' }" @click="traceTab = 'output'">输出数据</button>
-                  <button :class="{ active: traceTab === 'detail' }" @click="traceTab = 'detail'">执行详情</button>
-                </div>
-                <div class="detail-columns">
-                  <div>
-                    <h4>执行信息</h4>
-                    <p>工具名称：<b>{{ selectedNode.tool }}</b></p>
-                    <p>执行状态：<span class="success-tag">成功</span></p>
-                    <p>开始时间：17:30:23</p>
-                    <p>结束时间：17:30:25</p>
-                    <p>执行时长：2.1s</p>
-                  </div>
-                  <div class="code-card">
-                    <h4>执行结果</h4>
-                    <pre>{{ outputJson }}</pre>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-        </section>
-
-        <aside class="inspector-column">
-          <section class="inspector panel">
-            <h2>节点详情</h2>
-            <div class="inspector-tabs">
-              <button :class="{ active: inspectorTab === 'config' }" @click="inspectorTab = 'config'">配置</button>
-              <button :class="{ active: inspectorTab === 'explain' }" @click="inspectorTab = 'explain'">解释</button>
-              <button :class="{ active: inspectorTab === 'io' }" @click="inspectorTab = 'io'">输入输出</button>
-              <button :class="{ active: inspectorTab === 'test' }" @click="inspectorTab = 'test'">测试</button>
-            </div>
-            <div class="inspector-body">
-              <h3>节点解释</h3>
-              <h4>为什么需要这个节点？</h4>
-              <p>{{ selectedNode.reason }}</p>
-
-              <h4>选择的工具</h4>
-              <div class="selected-tool">
-                <FileInput :size="16" />
-                <span>{{ selectedNode.tool }}</span>
-                <b>匹配度 {{ selectedNode.confidence.toFixed(2) }}</b>
-              </div>
-
-              <div v-if="selectedNode.id === 'knowledge'" class="workflow-kb-select">
-                <h4>选择知识库</h4>
-                <button><Database :size="16" /> 财报分析库 <ChevronDown :size="14" /></button>
-                <p>系统将从该知识库返回相关文档片段，供后续风险总结节点使用。</p>
-                <div class="workflow-snippets">
-                  <article v-for="item in retrievalSnippets.slice(0, 2)" :key="item.title">
-                    <strong>{{ item.title }}</strong>
-                    <span>{{ item.text }}</span>
-                  </article>
-                </div>
-              </div>
-
-              <h4>选择原因</h4>
-              <ul>
-                <li>用户需求包含“财报分析”和“风险总结”</li>
-                <li>该工具专门用于财务指标提取</li>
-                <li>历史成功率高达 88%</li>
-                <li>相比其他工具更适合结构化数据提取</li>
-              </ul>
-
-              <h4>备选工具（Top 3）</h4>
-              <div class="tool-ranks">
-                <div v-for="tool in toolScores.slice(1)" :key="tool.name">
-                  <span>{{ tool.name }}</span>
-                  <b>{{ tool.score.toFixed(2) }}</b>
-                </div>
-              </div>
-
-              <h4>置信度 <strong class="confidence">0.91</strong></h4>
-              <div class="progress"><span></span></div>
-            </div>
-          </section>
-
-          <section class="side-card panel">
-            <div class="card-title">失败分析 <X :size="16" /></div>
-            <div class="empty-failure">暂无失败节点</div>
-          </section>
-          <section class="side-card panel">
-            <div class="card-title">优化建议</div>
-            <p class="suggestion"><Check :size="16" /> 工作流执行顺利，所有节点运行正常</p>
-            <p class="suggestion"><Check :size="16" /> 可考虑添加数据可视化节点增强报告展示</p>
-          </section>
-        </aside>
-      </section>
-    </main>
-
-    <main v-else-if="activePage === 'home'" class="agent-page">
-      <header class="topbar">
-        <div class="title-wrap">
-          <Bot :size="18" />
-          <h1>智能体工作台</h1>
-          <Code2 :size="15" />
-        </div>
-        <div class="top-actions">
-          <div class="saved-pill"><CheckCircle2 :size="17" /> 在线</div>
-          <button><MessageSquarePlus :size="17" />新建会话</button>
-          <button><Upload :size="17" />导入文件</button>
-          <button class="share"><Share2 :size="17" />分享</button>
-          <MoreVertical :size="20" class="muted-icon" />
-          <div class="avatar">Z</div>
-        </div>
-      </header>
-      <section class="agent-shell">
-        <header class="agent-top">
-          <h1>Agent 工作台</h1>
-          <span class="online-dot">在线</span>
-          <div class="agent-actions">
-            <button><MessageSquarePlus :size="15" /> 新建会话</button>
-            <button><RefreshCw :size="15" /></button>
-            <button><MoreVertical :size="15" /></button>
-            <button><Maximize2 :size="15" /></button>
-          </div>
-        </header>
-
-        <section class="agent-body">
-          <div class="chat-pane">
-            <div class="user-bubble">
-              <div class="headshot"></div>
-              <p>帮我分析这段 Python 代码的时间复杂度，并指出潜在问题</p>
-              <small>10:30</small>
-            </div>
-            <div class="assistant-bubble">
-              <div class="agent-icon"><Bot :size="17" /></div>
-              <div>
-                <strong>TraceMind Agent</strong>
-                <p>我会帮你分析这段 Python 代码的时间复杂度和潜在问题。</p>
-                <h4>分析结果：</h4>
-                <ul>
-                  <li>时间复杂度：O(n²)</li>
-                  <li>空间复杂度：O(1)</li>
-                </ul>
-                <h4>潜在问题：</h4>
-                <ul>
-                  <li>双重循环导致时间复杂度较高</li>
-                  <li>当输入规模较大时，性能会受到影响</li>
-                </ul>
-                <p>优化建议：可以考虑使用哈希表来优化查找操作，将时间复杂度降低到 O(n)。</p>
-                <small>10:31</small>
-              </div>
-            </div>
-            <div class="quick-actions">
-              <button><FileText :size="14" /> 查看执行过程</button>
-              <button><Library :size="14" /> 查看工具调用</button>
-              <button><ChartNoAxesCombined :size="14" /> 查看详细分析</button>
-            </div>
-            <label class="chat-input">
-              <input v-model="agentInput" placeholder="输入你的问题，或使用 / 触发快捷指令" />
-              <button><Sparkles :size="15" /></button>
-              <button class="send"><Send :size="16" /></button>
-            </label>
-          </div>
-
-          <aside class="conversation-info">
-            <h3>会话信息</h3>
-            <p><b>会话ID</b><span>conv_20240520_001</span></p>
-            <p><b>创建时间</b><span>2024-05-20 10:30:15</span></p>
-            <p><b>模型</b><span>gpt-4-turbo</span></p>
-            <p><b>状态</b><span class="green">已完成</span></p>
-            <p><b>总耗时</b><span>12.34s</span></p>
-            <p><b>总用量</b><span>1,245</span></p>
-            <div class="quick-list">
-              <h3>快速操作</h3>
-              <button><MessageSquarePlus :size="15" /> 新建会话</button>
-              <button><Upload :size="15" /> 导入文件</button>
-              <button><X :size="15" /> 清空对话</button>
-            </div>
-          </aside>
-        </section>
-      </section>
-    </main>
-
-    <main v-else-if="activePage === 'settings'" class="settings-page">
-      <header class="settings-page-head">
-        <h1>设置</h1>
-        <p>管理系统偏好、模型配置和集成设置。</p>
-      </header>
-
-      <section class="settings-content">
-        <div class="settings-layout">
-          <aside class="settings-menu panel">
-            <button class="active">通用设置</button>
-            <button>模型设置</button>
-            <button>记忆设置</button>
-            <button>安全设置</button>
-          </aside>
-
-          <section class="settings-form panel">
-            <div class="settings-form-head">
-              <h2>通用设置</h2>
-              <button class="template-create">保存设置</button>
-            </div>
-
-            <div class="setting-row">
-              <label>语言</label>
-              <button class="setting-select">简体中文 <ChevronDown :size="16" /></button>
-            </div>
-            <div class="setting-row">
-              <label>默认模型</label>
-              <button class="setting-select">GPT-4o <ChevronDown :size="16" /></button>
-            </div>
-            <div class="setting-row">
-              <label>主题模式</label>
-              <button class="setting-select">跟随系统 <ChevronDown :size="16" /></button>
-            </div>
-            <div class="setting-row">
-              <div>
-                <label>自动保存</label>
-                <p>自动保存编辑内容，避免数据丢失</p>
-              </div>
-              <span class="settings-switch"></span>
-            </div>
-            <div class="setting-row">
-              <div>
-                <label>自动保存间隔</label>
-                <p>设置自动保存的时间间隔</p>
-              </div>
-              <button class="setting-select small">5 分钟 <ChevronDown :size="16" /></button>
-            </div>
-            <div class="setting-row webhook">
-              <div>
-                <label>Webhook URL（可选）</label>
-                <p>当事件触发时发送 POST 请求到此地址</p>
-              </div>
-              <input value="https://example.com/webhook" />
-            </div>
-          </section>
-        </div>
-
-        <section class="settings-changes panel">
-          <h2>最近配置变更</h2>
-          <div class="settings-change-row"><span>更新默认模型</span><span>今天 10:32</span><span>Zhang San</span></div>
-          <div class="settings-change-row"><span>修改主题模式</span><span>今天 10:15</span><span>Zhang San</span></div>
-          <div class="settings-change-row"><span>更新自动保存间隔</span><span>昨天 16:05</span><span>Zhang San</span></div>
-        </section>
-      </section>
-    </main>
-
-    <main v-else-if="activePage === 'tools'" class="tools-page">
-      <header class="tools-header">
-        <div>
-          <h1>工具库</h1>
-          <p>管理和配置智能体可调用的工具，支持工具的启用、禁用与监控</p>
-        </div>
-        <div class="tools-actions">
-          <label><Search :size="16" /><input placeholder="搜索工具名称或描述..." /></label>
-          <button class="template-create"><Plus :size="17" />添加工具</button>
-        </div>
-      </header>
-
-      <section class="tools-content">
-        <div class="tools-stats">
-          <article v-for="stat in toolStats" :key="stat.label" class="tools-stat panel">
-            <span :class="['tools-stat-icon', stat.tone]"><component :is="stat.icon" :size="22" /></span>
-            <div>
-              <p>{{ stat.label }}</p>
-              <strong>{{ stat.value }}</strong>
-              <small>较上周 <b>{{ stat.delta }}</b></small>
-            </div>
-          </article>
-        </div>
-
-        <div class="tools-toolbar">
-          <div class="tools-tabs">
-            <button v-for="category in toolCategories" :key="category" :class="{ active: category === '全部' }">{{ category }}</button>
-          </div>
-          <div class="tools-filter">
-            <button>全部状态 <ChevronDown :size="14" /></button>
-            <button>默认排序 <ChevronDown :size="14" /></button>
-            <button><RefreshCw :size="15" />刷新</button>
-          </div>
-        </div>
-
-        <section class="tools-table panel">
-          <div class="tools-table-head">
-            <span>工具名称</span>
-            <span>类型</span>
-            <span>描述</span>
-            <span>状态</span>
-            <span>成功率</span>
-            <span>平均耗时</span>
-            <span>调用次数</span>
-            <span>操作</span>
-          </div>
-          <article v-for="tool in toolRows" :key="tool.name" class="tools-row">
-            <div class="tool-name-cell">
-              <span :class="['tool-row-icon', tool.tone]"><component :is="tool.icon" :size="22" /></span>
-              <div><strong>{{ tool.name }}</strong><small>{{ tool.version }}</small></div>
-            </div>
-            <span class="tool-type">{{ tool.type }}</span>
-            <p>{{ tool.desc }}</p>
-            <div class="tool-status">
-              <span class="toggle" :class="{ off: !tool.enabled }"></span>
-              <b>{{ tool.enabled ? '启用' : '禁用' }}</b>
-            </div>
-            <span class="tool-success">{{ tool.success }} <TrendingUp v-if="tool.trend === 'up'" :size="13" /><span v-else class="down">↓</span></span>
-            <span>{{ tool.latency }}</span>
-            <span>{{ tool.calls }}</span>
-            <div class="tool-actions">
-              <button><Eye :size="15" /></button>
-              <button><Gauge :size="15" /></button>
-              <button><MoreHorizontal :size="15" /></button>
-            </div>
-          </article>
-        </section>
-
-        <div class="tools-pagination">
-          <span>共 18 条工具</span>
-          <div><button disabled><ChevronDown :size="14" /></button><button class="active">1</button><button>2</button><button>3</button><button><ChevronDown :size="14" /></button><button>10 条/页 <ChevronDown :size="14" /></button></div>
-        </div>
-      </section>
-    </main>
-
-    <main v-else-if="activePage === 'memory'" class="memory-page">
-      <header class="memory-header">
-        <div>
-          <h1>记忆中心</h1>
-          <p>管理用户偏好、任务历史与工具习惯，帮助智能体更好地理解你</p>
-        </div>
-        <div class="memory-actions">
-          <label><Search :size="17" /><input placeholder="搜索记忆..." /></label>
-          <button class="template-create"><Plus :size="17" />新增记忆</button>
-        </div>
-      </header>
-
-      <section class="memory-content">
-        <div class="memory-stats">
-          <article v-for="stat in memoryStats" :key="stat.label" class="memory-stat panel">
-            <span :class="['memory-icon', stat.tone]"><component :is="stat.icon" :size="28" /></span>
-            <div>
-              <p>{{ stat.label }}</p>
-              <strong>{{ stat.value }}</strong>
-              <small>{{ stat.desc }}</small>
-            </div>
-          </article>
-        </div>
-
-        <div class="memory-tabs">
-          <button class="active">全部</button>
-          <button>偏好记忆</button>
-          <button>任务历史</button>
-          <button>工具习惯</button>
-        </div>
-
-        <section class="memory-main">
-          <div class="memory-list">
-            <article v-for="item in memoryItems" :key="item.title" class="memory-item panel" :class="{ active: item.active }">
-              <span :class="['memory-icon', item.tone]"><component :is="item.icon" :size="22" /></span>
-              <div>
-                <h3>{{ item.title }}</h3>
-                <p>{{ item.desc }}</p>
-                <div>
-                  <b :class="item.tone">{{ item.type }}</b>
-                  <b class="level">{{ item.level }}</b>
-                  <time>更新于 {{ item.updated }}</time>
-                </div>
-              </div>
-            </article>
-            <p class="memory-count">共 4 条记忆</p>
-          </div>
-
-          <aside class="memory-detail">
-            <section class="memory-detail-card panel">
-              <div class="memory-detail-title">
-                <span class="memory-icon pink"><Heart :size="22" /></span>
-                <h2>用户偏好：喜欢表格化输出</h2>
-                <b>高</b>
-              </div>
-              <div class="memory-kv">
-                <span><Target :size="16" />记忆类型</span><strong>偏好记忆</strong>
-                <span><Info :size="16" />重要性</span><strong><b class="level">高</b></strong>
-                <span><Bot :size="16" />来源任务</span><strong>财报分析助手 - 财报分析报告生成</strong>
-                <span><Calendar :size="16" />首次记录</span><strong>2025-04-20 14:32</strong>
-                <span><Clock :size="16" />最后更新</span><strong>2025-05-15 10:24</strong>
-                <span><FileText :size="16" />详细描述</span>
-                <p>用户倾向于以表格形式查看结果，特别是在数据分析、对比和汇总场景中。当提供多个选项或方案时，用户更容易通过表格快速理解关键信息。</p>
-                <span><Layers3 :size="16" />影响模块</span>
-                <div class="memory-tags"><b>输出生成</b><b>数据分析</b><b>报告撰写</b></div>
-              </div>
-            </section>
-
-            <section class="memory-ref-card panel">
-              <h3>本次生成参考的记忆 <Info :size="15" /></h3>
-              <div v-for="ref in memoryRefs" :key="ref.text">
-                <component :is="ref.icon" :class="ref.tone" :size="17" />
-                <span>{{ ref.text }}</span>
-              </div>
-            </section>
-          </aside>
-        </section>
-      </section>
-    </main>
-
-    <main v-else-if="activePage === 'knowledge'" class="knowledge-page">
-      <header class="knowledge-header">
-        <div class="title-wrap">
-          <h1>知识库</h1>
-          <span class="online-dot">在线</span>
-        </div>
-        <div class="knowledge-actions">
-          <button class="template-create"><Plus :size="17" />新建知识库</button>
-          <button><Upload :size="17" />导入文档</button>
-          <label><Search :size="16" /><input placeholder="搜索知识库" /></label>
-          <Bell :size="19" class="muted-icon" />
-          <div class="avatar">Z</div>
-        </div>
-      </header>
-
-      <section class="knowledge-content">
-        <div class="knowledge-stats">
-          <article v-for="stat in knowledgeStats" :key="stat.label" class="knowledge-stat panel">
-            <span :class="['knowledge-stat-icon', stat.tone]"><component :is="stat.icon" :size="25" /></span>
-            <div>
-              <p>{{ stat.label }}</p>
-              <strong>{{ stat.value }} <small>{{ stat.suffix }}</small></strong>
-              <em>较昨日 <b>{{ stat.delta }}</b></em>
-            </div>
-          </article>
-        </div>
-
-        <section class="knowledge-main">
-          <aside class="kb-list panel">
-            <div class="kb-list-head">
-              <h3>知识库列表</h3>
-              <button>全部状态 <ChevronDown :size="14" /></button>
-            </div>
-            <article v-for="kb in knowledgeBases" :key="kb.name" class="kb-item" :class="{ active: kb.active }">
-              <span :class="['kb-icon', kb.tone]"><component :is="kb.icon" :size="28" /></span>
-              <div>
-                <h4>{{ kb.name }} <small>正常</small></h4>
-                <p>{{ kb.desc }}</p>
-                <div class="kb-meta">
-                  <span>文档数 {{ kb.docs }}</span>
-                  <span>向量片段 {{ kb.chunks }}</span>
-                  <span>更新于 {{ kb.updated }}</span>
-                  <b>正常</b>
-                </div>
-              </div>
-              <button>{{ kb.active ? '进入' : '查看' }}</button>
-              <MoreVertical :size="18" />
-            </article>
-            <div class="kb-pagination">
-              <span>共 12 条</span>
-              <div><button disabled><ChevronDown :size="14" /></button><button class="active">1</button><button>2</button><button><ChevronDown :size="14" /></button><button>10 条/页</button></div>
-            </div>
-          </aside>
-
-          <section class="kb-detail panel">
-            <div class="kb-detail-head">
-              <h3>产品文档库 <span>正常</span></h3>
-              <div><button>编辑</button><button><MoreVertical :size="16" /></button></div>
-            </div>
-            <div class="kb-detail-tabs">
-              <button class="active">概览</button>
-              <button>文档管理</button>
-              <button>检索测试</button>
-              <button>设置</button>
-            </div>
-
-            <div class="kb-section">
-              <h4>基本信息</h4>
-              <div class="kb-info-grid">
-                <span>知识库名称<b>产品文档库</b></span>
-                <span>创建时间<b>2024-03-15 09:30</b></span>
-                <span>更新时间<b>2024-05-12 10:30</b></span>
-                <span>创建人<b>张晓明</b></span>
-              </div>
-            </div>
-
-            <div class="kb-section">
-              <h4>检索配置</h4>
-              <div class="kb-config-row">
-                <span>Embedding 模型<b>text-embedding-3-large</b></span>
-                <span>Chunk 大小<b>800</b></span>
-                <span>Chunk 重叠<b>120</b></span>
-                <span>检索模式<b>混合检索</b></span>
-                <span>Top K<b>8</b></span>
-              </div>
-            </div>
-
-            <div class="kb-bottom-grid">
-              <div class="kb-mini-chart">
-                <div><h4>检索趋势（近7天）</h4><strong>总检索量 2,845 次</strong></div>
-                <svg viewBox="0 0 420 150">
-                  <polyline points="8,112 70,82 132,62 194,38 256,74 318,34 386,48 414,40" />
-                  <path d="M8 112 L70 82 L132 62 L194 38 L256 74 L318 34 L386 48 L414 40 L414 142 L8 142 Z" />
-                </svg>
-              </div>
-
-              <div class="kb-docs-simple">
-                <div class="kb-docs-head"><h4>已关联文档（128）</h4><button>查看全部</button></div>
-                <div v-for="doc in knowledgeDocuments" :key="doc.name" class="kb-doc-row">
-                  <FileText :size="15" />
-                  <span>{{ doc.name }}</span>
-                  <b :class="doc.tone">{{ doc.type }}</b>
-                  <small>{{ doc.size }}</small>
-                </div>
-              </div>
-            </div>
-
-            <div class="kb-retrieval-simple">
-              <div>
-                <h4>模拟检索结果</h4>
-                <p>当前 Workflow 知识检索节点选择“财报分析库”后，可返回以下相关片段。</p>
-              </div>
-              <article v-for="item in retrievalSnippets" :key="item.title">
-                <span>{{ item.title }}</span>
-                <p>{{ item.text }}</p>
-                <b>相关度 {{ item.score.toFixed(2) }}</b>
-              </article>
-            </div>
-          </section>
-        </section>
-      </section>
-    </main>
-
-    <main v-else-if="activePage === 'template'" class="template-page">
-      <header class="template-header">
-        <div>
-          <h1>模板库</h1>
-          <p>从模板快速开始，或创建你自己的模板</p>
-        </div>
-        <div class="template-header-actions">
-          <label class="template-search"><Search :size="16" /><input placeholder="搜索模板..." /></label>
-          <button class="template-create"><Plus :size="17" />创建模板</button>
-        </div>
-      </header>
-
-      <section class="template-content">
-        <div class="template-stats">
-          <article v-for="stat in templateStats" :key="stat.label" class="template-stat panel">
-            <span :class="['template-stat-icon', stat.tone]"><component :is="stat.icon" :size="20" /></span>
-            <div>
-              <p>{{ stat.label }}</p>
-              <strong>{{ stat.value }}</strong>
-            </div>
-          </article>
-        </div>
-
-        <div class="template-toolbar">
-          <div class="template-tabs">
-            <button v-for="category in templateCategories" :key="category" :class="{ active: category === '全部' }">{{ category }}</button>
-          </div>
-          <div class="template-sort">
-            <button>排序：最新 <ChevronDown :size="14" /></button>
-            <button><Filter :size="15" />筛选</button>
-          </div>
-        </div>
-
-        <section class="template-grid">
-          <article v-for="item in templateCards" :key="item.title" class="template-card panel">
-            <div class="template-card-head">
-              <span v-if="item.badge" :class="['template-badge', item.badgeTone]">{{ item.badge }}</span>
-              <button :class="{ starred: item.starred }"><Star :size="17" /></button>
-            </div>
-            <h3>{{ item.title }}</h3>
-            <p>{{ item.desc }}</p>
-            <div class="template-flow">
-              <template v-for="(step, index) in item.steps" :key="step">
-                <span :class="item.tone"><FileText :size="13" />{{ step }}</span>
-                <i v-if="index < item.steps.length - 1"></i>
-              </template>
-            </div>
-            <div class="template-tags">
-              <span v-for="tag in item.tags" :key="tag">{{ tag }}</span>
-            </div>
-            <div class="template-meta">
-              <span><Eye :size="14" />{{ item.views }}</span>
-              <span><Heart :size="14" />{{ item.likes }}</span>
-              <span><User :size="14" />{{ item.author }}</span>
-              <time>{{ item.date }}</time>
-            </div>
-          </article>
-
-          <article class="template-new-card panel">
-            <button><Plus :size="30" /></button>
-            <h3>创建新模板</h3>
-            <p>从空白模板开始，创建你自己的工作流模板</p>
-            <button class="template-create">开始创建</button>
-          </article>
-        </section>
-
-        <div class="template-pagination">
-          <button disabled><ChevronDown :size="15" /></button>
-          <button class="active">1</button>
-          <button>2</button>
-          <button>3</button>
-          <button><ChevronDown :size="15" /></button>
-          <button><ChevronDown :size="15" /></button>
-        </div>
-      </section>
-    </main>
-
-    <main v-else class="agents-page">
-      <header class="topbar">
-        <div class="title-wrap">
-          <Bot :size="18" />
-          <h1>智能体</h1>
-          <span class="online-dot">在线</span>
-        </div>
-        <div class="top-actions">
-          <button class="share"><Plus :size="17" />创建智能体</button>
-          <button><Upload :size="17" />导入配置</button>
-          <button><MessageSquarePlus :size="17" /></button>
-          <button><Bell :size="17" /></button>
-          <div class="avatar">Z</div>
-        </div>
-      </header>
-
-      <section class="agents-dashboard">
-        <section class="agent-hero panel">
-          <div>
-            <h2>构建、管理并协作你的 AI 智能体</h2>
-            <p>快速构建专属智能体，自动化复杂任务，赋能业务增长。</p>
-            <div class="hero-actions">
-              <button class="primary"><Plus :size="17" /> 新建智能体</button>
-              <button><TimerReset :size="17" /> 查看运行记录</button>
-              <button><Library :size="17" /> 智能体市场</button>
-            </div>
-          </div>
-          <div class="hero-visual">
-            <div class="bot-orbit">
-              <Bot :size="58" />
-            </div>
-          </div>
-        </section>
-
-        <div class="metrics-strip">
-          <section class="metric-card panel">
-            <div class="metric-top"><span>智能体总数</span><span class="metric-icon blue"><Bot :size="20" /></span></div>
-            <strong>24 <small>个</small></strong>
-            <p>较昨日 +2 <TrendingUp :size="13" /></p>
-            <svg viewBox="0 0 180 44"><path d="M2 32 C20 38 26 26 42 31 S65 39 80 28 101 37 116 24 135 30 148 18 165 15 178 8" /></svg>
-          </section>
-          <section class="metric-card panel">
-            <div class="metric-top"><span>在线运行中</span><span class="metric-icon green"><TimerReset :size="20" /></span></div>
-            <strong>8 <small>个</small></strong>
-            <p>较昨日 +1 <TrendingUp :size="13" /></p>
-            <svg class="green-line" viewBox="0 0 180 44"><path d="M2 25 C18 20 27 34 42 29 S61 18 78 31 101 34 116 12 134 19 148 13 164 18 178 6" /></svg>
-          </section>
-          <section class="metric-card panel">
-            <div class="metric-top"><span>平均成功率</span><span class="metric-icon violet"><ShieldCheck :size="20" /></span></div>
-            <strong>92.7 <small>%</small></strong>
-            <p>较昨日 +3.6% <TrendingUp :size="13" /></p>
-            <svg class="violet-line" viewBox="0 0 180 44"><path d="M2 35 C18 39 23 12 39 20 S62 33 78 22 101 30 117 23 136 27 150 20 166 13 178 7" /></svg>
-          </section>
-          <section class="metric-card panel">
-            <div class="metric-top"><span>日均调用量</span><span class="metric-icon amber"><BarChart3 :size="20" /></span></div>
-            <strong>12,845 <small>次</small></strong>
-            <p>较昨日 +8.2% <TrendingUp :size="13" /></p>
-            <svg class="amber-line" viewBox="0 0 180 44"><path d="M2 33 C18 28 28 36 44 29 S66 14 82 24 101 38 117 19 137 25 151 14 164 17 178 5" /></svg>
-          </section>
-        </div>
-
-        <section class="agents-list panel">
-          <div class="agents-list-head">
-            <h3>我的智能体</h3>
-            <div>
-              <button>全部状态 <ChevronDown :size="14" /></button>
-              <button>全部角色 <ChevronDown :size="14" /></button>
-              <label><Search :size="15" /><input placeholder="搜索智能体名称或描述" /></label>
-            </div>
-          </div>
-          <div class="agent-card-grid">
-            <article v-for="agent in agentCards" :key="agent.name" class="agent-manage-card" :class="{ featured: agent.name === '财报分析助手' }">
-              <div class="agent-card-top">
-                <span class="agent-card-icon" :class="agent.tone"><component :is="agent.icon" :size="30" /></span>
-                <div>
-                  <h4>{{ agent.name }} <small>{{ agent.tag }}</small></h4>
-                  <p>自动提取关键数据，分析财务指标并生成洞察报告。</p>
-                </div>
-              </div>
-              <div class="agent-meta">
-                <span><Sparkles :size="13" /> {{ agent.model }}</span>
-                <span>{{ agent.tools }} 个工具</span>
-                <b :class="{ online: agent.online }">{{ agent.online ? '在线' : '离线' }}</b>
-              </div>
-              <div class="agent-stats">
-                <span><small>成功率</small>{{ agent.success }}</span>
-                <span><small>调用量</small>{{ agent.calls }}</span>
-                <span><small>运行中</small>{{ agent.running }}</span>
-                <button>进入</button>
-                <button class="ghost">编辑</button>
-                <button class="dots">...</button>
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <aside class="agent-detail panel">
-          <div class="detail-title">
-            <h3>智能体详情</h3>
-            <button>切换智能体 <ChevronDown :size="14" /></button>
-          </div>
-          <div class="detail-agent-head">
-            <span class="agent-card-icon green"><FileText :size="34" /></span>
-            <div>
-              <h4>财报分析助手 <small>分析助手</small></h4>
-              <p><span class="online-dot">在线</span></p>
-            </div>
-          </div>
-          <p class="detail-desc">自动提取财报关键数据，分析财务指标并生成洞察报告。</p>
-          <div class="detail-kv">
-            <span>模型</span><b>Qwen3-32B</b>
-            <span>工具</span><b>12 个工具</b>
-          </div>
-          <div class="tool-chip-row">
-            <span v-for="tone in ['violet','amber','blue','cyan','green']" :key="tone" :class="tone"></span>
-            <small>+7</small>
-          </div>
-          <div class="recent-task-head">
-            <h4>最近任务</h4>
-            <button>查看全部</button>
-          </div>
-          <div class="recent-task" v-for="task in ['腾讯控股 2024Q1 财报分析', '阿里巴巴 2024Q4 财报对比', '美团 2024Q1 经营分析报告']" :key="task">
-            <FileText :size="15" />
-            <span>{{ task }}</span>
-            <small>今天 17:20</small>
-            <b>成功</b>
-          </div>
-        </aside>
-      </section>
-    </main>
+    <AgentsPage
+      v-else
+      v-model:agent-search="agentSearch"
+      :agent-cards="agentCards"
+      :filtered-agents="filteredAgents"
+      :selected-agent="selectedAgent"
+      :selected-agent-name="selectedAgentName"
+      :agent-avg-success="agentAvgSuccess"
+      :agent-total-calls="agentTotalCalls"
+      :recent-tasks="recentTasks"
+      @create-agent="createAgent"
+      @navigate="setPage"
+      @select-agent="selectAgent"
+      @enter-agent="enterAgent"
+      @switch-agent="switchAgent"
+      @notify="notify"
+    />
   </div>
 </template>
