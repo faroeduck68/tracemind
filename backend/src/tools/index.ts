@@ -1,5 +1,6 @@
 import financialExtractTool from './financialExtract.tool'
 import financialRiskTool from './financialRisk.tool'
+import documentClassifyTool from './documentClassify.tool'
 import intentClassifierTool from './intentClassifier.tool'
 import knowledgeSearchTool from './knowledgeSearch.tool'
 import markdownToDocxTool from './markdownToDocx.tool'
@@ -14,6 +15,7 @@ import userInputTool from './userInput.tool'
 export const toolRegistry = {
   user_input: userInputTool,
   intent_classifier: intentClassifierTool,
+  document_classify_tool: documentClassifyTool,
   pdf_parse_tool: pdfParseTool,
   financial_extract_tool: financialExtractTool,
   financial_risk_tool: financialRiskTool,

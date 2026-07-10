@@ -1,20 +1,6 @@
-import { toolRegistry } from '../tools'
 import type { HookContext, HookResult } from './hookTypes'
 
 export function beforeWorkflowRunHook(ctx: HookContext): HookResult {
-  const workflow = ctx.metadata?.workflow
-  if (workflow) {
-    for (const node of workflow.nodes) {
-      if (!toolRegistry[node.tool as keyof typeof toolRegistry]) {
-        return {
-          outcome: 'blocking',
-          blocked: true,
-          reason: `Tool is not registered: ${node.tool}`
-        }
-      }
-    }
-  }
-
   const context = ctx.context as { hookState?: { workflowStartedAt?: number } } | undefined
   if (context) {
     context.hookState ??= {}

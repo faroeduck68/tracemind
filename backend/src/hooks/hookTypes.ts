@@ -35,11 +35,15 @@ export type HookToolDefinition = {
   name: string
   displayName?: string
   enabled?: boolean
+  type?: 'builtin' | 'http' | 'llm' | 'mcp'
+  riskLevel?: string
   dependencies?: string[]
   inputSchema?: unknown
   outputSchema?: unknown
   config?: unknown
-  source?: 'registry' | 'database' | 'node'
+  source?: 'registry' | 'database' | 'node' | 'local' | 'mcp' | string
+  mcpServerId?: number | null
+  mcpToolName?: string | null
 }
 
 export type HookContext = {

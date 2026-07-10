@@ -1,9 +1,14 @@
+import { NodeStatus } from './common'
 import { WorkflowContext } from './context'
 
 export type ToolResult = {
   success: boolean
   output: unknown
   message?: string
+  status?: NodeStatus
+  errorMessage?: string
+  businessFailure?: boolean
+  reason?: string
 }
 
 export type TraceMindTool = {

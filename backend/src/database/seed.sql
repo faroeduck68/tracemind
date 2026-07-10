@@ -1,28 +1,85 @@
 USE tracemind;
 
 INSERT INTO tools
-(name, display_name, version, category, description, enabled, success_rate, avg_latency_ms, call_count)
+(name, display_name, `type`, version, category, description, enabled, risk_level, success_rate, avg_latency_ms, call_count)
 VALUES
-('user_input', '用户输入', 'v1.0.0', '输入', '接收用户原始需求', 1, 99.0, 100, 0),
-('intent_classifier', '意图识别器', 'v1.0.0', '智能分析', '识别用户任务意图', 1, 94.0, 800, 0),
-('pdf_parse_tool', 'PDF 解析工具', 'v1.2.0', '数据处理', '解析 PDF 文件内容，提取文本和结构化信息', 1, 96.2, 1230, 2341),
-('financial_extract_tool', '财务指标提取工具', 'v1.1.0', '数据分析', '从财报文本中提取收入、利润、负债率、现金流等指标', 1, 92.5, 1870, 1892),
-('risk_summary_tool', '风险总结工具', 'v1.0.3', '数据分析', '基于财务指标生成风险分析与总结', 1, 91.3, 2340, 1256),
-('finance_knowledge_base', '财务知识检索工具', 'v1.0.0', '检索搜索', '从财务知识库中检索相关资料', 1, 90.2, 980, 4532),
-('summary_llm', '总结大模型工具', 'v1.0.0', '内容生成', '调用大模型生成总结内容', 1, 95.0, 1050, 3214),
-('report_output', '报告输出工具', 'v1.0.0', '输出', '生成结构化报告并输出结果', 1, 97.0, 760, 2105),
-('financial_risk_tool', '财务风险分析工具', 'v1.0.0', '数据分析', '基于财务指标输出结构化风险判断与建议', 1, 91.0, 1600, 0),
-('report_generate_tool', '报告生成工具', 'v1.0.0', '内容生成', '将财务指标与风险分析汇总为 Markdown 报告', 1, 95.5, 900, 0),
-('markdown_to_docx_tool', 'Word 导出工具', 'v1.0.0', '输出', '将 Markdown 报告转换为 Word 文件（第一版 Mock）', 1, 96.0, 700, 0),
-('report_output_tool', '报告结果输出工具', 'v1.0.0', '输出', '返回最终报告下载链接与分析结论', 1, 97.5, 500, 0)
+('user_input', '用户输入', 'builtin', 'v1.0.0', '输入', '接收用户原始需求', 1, 'low', 99.0, 100, 0),
+('intent_classifier', '意图识别器', 'builtin', 'v1.0.0', '智能分析', '识别用户任务意图', 1, 'low', 94.0, 800, 0),
+('pdf_parse_tool', 'PDF 解析工具', 'builtin', 'v1.2.0', '数据处理', '解析 PDF 文件内容，提取文本和结构化信息', 1, 'low', 96.2, 1230, 2341),
+('financial_extract_tool', '财务指标提取工具', 'builtin', 'v1.1.0', '数据分析', '从财报文本中提取收入、利润、负债率、现金流等指标', 1, 'low', 92.5, 1870, 1892),
+('risk_summary_tool', '风险总结工具', 'builtin', 'v1.0.3', '数据分析', '基于财务指标生成风险分析与总结', 1, 'low', 91.3, 2340, 1256),
+('finance_knowledge_base', '财务知识检索工具', 'builtin', 'v1.0.0', '检索搜索', '从财务知识库中检索相关资料', 1, 'low', 90.2, 980, 4532),
+('summary_llm', '总结大模型工具', 'builtin', 'v1.0.0', '内容生成', '调用大模型生成总结内容', 1, 'low', 95.0, 1050, 3214),
+('report_output', '报告输出工具', 'builtin', 'v1.0.0', '输出', '生成结构化报告并输出结果', 1, 'low', 97.0, 760, 2105),
+('financial_risk_tool', '财务风险分析工具', 'builtin', 'v1.0.0', '数据分析', '基于财务指标输出结构化风险判断与建议', 1, 'low', 91.0, 1600, 0),
+('report_generate_tool', '报告生成工具', 'builtin', 'v1.0.0', '内容生成', '将财务指标与风险分析汇总为 Markdown 报告', 1, 'low', 95.5, 900, 0),
+('markdown_to_docx_tool', 'Word 导出工具', 'builtin', 'v1.0.0', '输出', '将 Markdown 报告转换为 Word 文件（第一版 Mock）', 1, 'low', 96.0, 700, 0),
+('report_output_tool', '报告结果输出工具', 'builtin', 'v1.0.0', '输出', '返回最终报告下载链接与分析结论', 1, 'low', 97.5, 500, 0)
 ON DUPLICATE KEY UPDATE
 display_name = VALUES(display_name),
+`type` = VALUES(`type`),
 version = VALUES(version),
 category = VALUES(category),
 description = VALUES(description),
 enabled = VALUES(enabled),
+risk_level = VALUES(risk_level),
 success_rate = VALUES(success_rate),
 avg_latency_ms = VALUES(avg_latency_ms);
+
+INSERT INTO tools
+(name, display_name, `type`, version, category, description, enabled, risk_level, input_schema, output_schema, config_json, auth_config)
+VALUES
+(
+  'weather_query_tool',
+  '天气查询工具',
+  'http',
+  'v1.0.0',
+  'HTTP API',
+  '根据城市查询实时天气',
+  0,
+  'low',
+  JSON_OBJECT('city', JSON_OBJECT('type', 'string', 'required', true)),
+  JSON_OBJECT(
+    'city', 'string',
+    'province', 'string',
+    'weather', 'string',
+    'temperature', 'string',
+    'winddirection', 'string',
+    'windpower', 'string',
+    'humidity', 'string',
+    'reporttime', 'string'
+  ),
+  JSON_OBJECT(
+    'method', 'GET',
+    'endpoint', 'https://restapi.amap.com/v3/weather/weatherInfo',
+    'headers', JSON_OBJECT(),
+    'queryParams', JSON_OBJECT('city', '{{input.city}}', 'extensions', 'base'),
+    'bodyTemplate', JSON_OBJECT(),
+    'inputMapping', JSON_OBJECT(),
+    'outputMapping', JSON_OBJECT(
+      'city', 'lives[0].city',
+      'province', 'lives[0].province',
+      'weather', 'lives[0].weather',
+      'temperature', 'lives[0].temperature',
+      'winddirection', 'lives[0].winddirection',
+      'windpower', 'lives[0].windpower',
+      'humidity', 'lives[0].humidity',
+      'reporttime', 'lives[0].reporttime',
+      'status', 'status',
+      'info', 'info'
+    )
+  ),
+  JSON_OBJECT('type', 'apiKey', 'keyName', 'key', 'in', 'query', 'value', 'userSecret:AMAP_API_KEY', 'fallback', true)
+)
+ON DUPLICATE KEY UPDATE
+display_name = VALUES(display_name),
+`type` = VALUES(`type`),
+category = VALUES(category),
+description = VALUES(description),
+input_schema = VALUES(input_schema),
+output_schema = VALUES(output_schema),
+config_json = VALUES(config_json),
+auth_config = VALUES(auth_config);
 
 INSERT INTO memories
 (memory_type, title, content, importance, importance_score, source_type, enabled)

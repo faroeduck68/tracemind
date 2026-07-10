@@ -2,6 +2,7 @@ import { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { execute, query, withTransaction } from '../config/db'
 import { WorkflowEdge, WorkflowEdgeRow, WorkflowGraph, WorkflowNode, WorkflowNodeRow } from '../types/workflow'
 import { parseJson, stringifyJson } from '../utils/json'
+import { ensureWorkflowHistoryTables } from './workflowHistorySchema.model'
 
 export type WorkflowRow = RowDataPacket & {
   id: number
@@ -10,35 +11,52 @@ export type WorkflowRow = RowDataPacket & {
   source_type: string
   original_query: string | null
   intent: string
+  workflow_type: string | null
   confidence: string | number | null
   status: string
+  node_count: number | null
+  edge_count: number | null
   workflow_json: unknown
+  conversation_id: string | null
   created_at: string
   updated_at: string
 }
 
-export async function createWorkflowWithGraph(graph: WorkflowGraph) {
+export type WorkflowHistoryRow = WorkflowRow & {
+  latest_run_id: number | null
+  latest_run_status: string | null
+  latest_run_started_at: string | null
+  latest_run_finished_at: string | null
+}
+
+export async function createWorkflowWithGraph(graph: WorkflowGraph, options: { conversationId?: string | null } = {}) {
+  await ensureWorkflowHistoryTables()
   return withTransaction(async (connection) => {
     const [workflowResult] = await connection.execute<ResultSetHeader>(
       `INSERT INTO workflows
-       (name, description, source_type, original_query, intent, confidence, status, workflow_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (name, description, source_type, original_query, intent, workflow_type, confidence, status, node_count, edge_count, workflow_json, conversation_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         graph.name,
         graph.description ?? null,
         graph.sourceType ?? 'generated',
         graph.originalQuery ?? null,
         graph.intent,
+        inferWorkflowType(graph),
         graph.confidence,
         graph.status ?? 'draft',
+        graph.nodes.length,
+        graph.edges.length,
         stringifyJson({
           name: graph.name,
           description: graph.description,
           intent: graph.intent,
+          workflowType: inferWorkflowType(graph),
           confidence: graph.confidence,
           nodes: graph.nodes,
           edges: graph.edges
-        })
+        }),
+        options.conversationId ?? null
       ]
     )
 
@@ -51,10 +69,11 @@ export async function createWorkflowWithGraph(graph: WorkflowGraph) {
 }
 
 export async function updateWorkflowWithGraph(workflowId: number, graph: WorkflowGraph) {
+  await ensureWorkflowHistoryTables()
   return withTransaction(async (connection) => {
     await connection.execute(
       `UPDATE workflows
-       SET name = ?, description = ?, source_type = ?, original_query = ?, intent = ?, confidence = ?, status = ?, workflow_json = ?
+       SET name = ?, description = ?, source_type = ?, original_query = ?, intent = ?, workflow_type = ?, confidence = ?, status = ?, node_count = ?, edge_count = ?, workflow_json = ?
        WHERE id = ?`,
       [
         graph.name,
@@ -62,13 +81,17 @@ export async function updateWorkflowWithGraph(workflowId: number, graph: Workflo
         graph.sourceType ?? 'manual',
         graph.originalQuery ?? null,
         graph.intent,
+        inferWorkflowType(graph),
         graph.confidence,
         graph.status ?? 'draft',
+        graph.nodes.length,
+        graph.edges.length,
         stringifyJson({
           id: workflowId,
           name: graph.name,
           description: graph.description,
           intent: graph.intent,
+          workflowType: inferWorkflowType(graph),
           confidence: graph.confidence,
           nodes: graph.nodes,
           edges: graph.edges
@@ -107,6 +130,10 @@ async function insertNodes(connection: PoolConnection, workflowId: number, nodes
         stringifyJson({
           ...(node.config && typeof node.config === 'object' && !Array.isArray(node.config) ? node.config : {}),
           displayName: node.displayName,
+          toolReason: node.toolReason,
+          roleInWorkflow: node.roleInWorkflow,
+          inputSummary: node.inputSummary,
+          outputSummary: node.outputSummary,
           candidateTools: node.candidateTools ?? []
         }),
         stringifyJson(node.inputSchema ?? null),
@@ -128,16 +155,18 @@ async function insertEdges(connection: PoolConnection, workflowId: number, edges
 }
 
 export async function listWorkflows() {
+  await ensureWorkflowHistoryTables()
   return query<WorkflowRow[]>(
-    `SELECT id, name, description, source_type, original_query, intent, confidence, status, workflow_json, created_at, updated_at
+    `SELECT id, name, description, source_type, original_query, intent, workflow_type, confidence, status, node_count, edge_count, workflow_json, conversation_id, created_at, updated_at
      FROM workflows
      ORDER BY updated_at DESC`
   )
 }
 
 export async function findWorkflowById(id: number) {
+  await ensureWorkflowHistoryTables()
   const rows = await query<WorkflowRow[]>(
-    `SELECT id, name, description, source_type, original_query, intent, confidence, status, workflow_json, created_at, updated_at
+    `SELECT id, name, description, source_type, original_query, intent, workflow_type, confidence, status, node_count, edge_count, workflow_json, conversation_id, created_at, updated_at
      FROM workflows
      WHERE id = ?`,
     [id]
@@ -147,10 +176,12 @@ export async function findWorkflowById(id: number) {
 }
 
 export async function deleteWorkflowById(id: number) {
+  await ensureWorkflowHistoryTables()
   return execute<ResultSetHeader>('DELETE FROM workflows WHERE id = ?', [id])
 }
 
 export async function listNodesByWorkflowId(workflowId: number) {
+  await ensureWorkflowHistoryTables()
   return query<(RowDataPacket & WorkflowNodeRow)[]>(
     `SELECT id, workflow_id, node_key, node_type, label, sub_label, icon, x, y, status, tone, tool_name, confidence, reason, config, input_schema, output_schema
      FROM workflow_nodes
@@ -161,12 +192,89 @@ export async function listNodesByWorkflowId(workflowId: number) {
 }
 
 export async function listEdgesByWorkflowId(workflowId: number) {
+  await ensureWorkflowHistoryTables()
   return query<(RowDataPacket & WorkflowEdgeRow)[]>(
     `SELECT id, workflow_id, edge_key, source_node_key, target_node_key, branch, condition_expr
      FROM workflow_edges
      WHERE workflow_id = ?
      ORDER BY id ASC`,
     [workflowId]
+  )
+}
+
+export async function listWorkflowHistory() {
+  await ensureWorkflowHistoryTables()
+  return query<WorkflowHistoryRow[]>(
+    `SELECT
+       w.id,
+       w.name,
+       w.description,
+       w.source_type,
+       w.original_query,
+       w.intent,
+       w.workflow_type,
+       w.confidence,
+       w.status,
+       w.node_count,
+       w.edge_count,
+       w.workflow_json,
+       w.conversation_id,
+       w.created_at,
+       w.updated_at,
+       r.id AS latest_run_id,
+       r.status AS latest_run_status,
+       r.started_at AS latest_run_started_at,
+       r.finished_at AS latest_run_finished_at
+     FROM workflows w
+     LEFT JOIN (
+       SELECT wr.*
+       FROM workflow_runs wr
+       INNER JOIN (
+         SELECT workflow_id, MAX(id) AS latest_run_id
+         FROM workflow_runs
+         GROUP BY workflow_id
+       ) latest ON latest.latest_run_id = wr.id
+     ) r ON r.workflow_id = w.id
+     ORDER BY w.updated_at DESC, w.id DESC`
+  )
+}
+
+export async function listWorkflowsByConversationId(conversationId: string) {
+  await ensureWorkflowHistoryTables()
+  return query<WorkflowHistoryRow[]>(
+    `SELECT
+       w.id,
+       w.name,
+       w.description,
+       w.source_type,
+       w.original_query,
+       w.intent,
+       w.workflow_type,
+       w.confidence,
+       w.status,
+       w.node_count,
+       w.edge_count,
+       w.workflow_json,
+       w.conversation_id,
+       w.created_at,
+       w.updated_at,
+       r.id AS latest_run_id,
+       r.status AS latest_run_status,
+       r.started_at AS latest_run_started_at,
+       r.finished_at AS latest_run_finished_at
+     FROM workflows w
+     LEFT JOIN (
+       SELECT wr.*
+       FROM workflow_runs wr
+       INNER JOIN (
+         SELECT workflow_id, MAX(id) AS latest_run_id
+         FROM workflow_runs
+         GROUP BY workflow_id
+       ) latest ON latest.latest_run_id = wr.id
+     ) r ON r.workflow_id = w.id
+     WHERE w.conversation_id = ?
+     ORDER BY w.updated_at DESC, w.id DESC`,
+    [conversationId]
   )
 }
 
@@ -177,7 +285,13 @@ export function nodeRowToWorkflowNode(row: WorkflowNodeRow): WorkflowNode {
     ? config.candidateTools
         .map((tool) => ({
           name: String((tool as Record<string, unknown>).name ?? ''),
-          score: Number((tool as Record<string, unknown>).score ?? 0)
+          displayName: typeof (tool as Record<string, unknown>).displayName === 'string'
+            ? ((tool as Record<string, unknown>).displayName as string)
+            : undefined,
+          score: Number((tool as Record<string, unknown>).score ?? 0),
+          reason: typeof (tool as Record<string, unknown>).reason === 'string'
+            ? ((tool as Record<string, unknown>).reason as string)
+            : undefined
         }))
         .filter((tool) => tool.name)
     : []
@@ -194,10 +308,14 @@ export function nodeRowToWorkflowNode(row: WorkflowNodeRow): WorkflowNode {
     tool: row.tool_name,
     toolName: row.tool_name,
     displayName,
+    toolReason: typeof config?.toolReason === 'string' ? config.toolReason : undefined,
+    roleInWorkflow: typeof config?.roleInWorkflow === 'string' ? config.roleInWorkflow : undefined,
     confidence: Number(row.confidence ?? 0),
     reason: row.reason,
     candidateTools,
     config,
+    inputSummary: typeof config?.inputSummary === 'string' ? config.inputSummary : undefined,
+    outputSummary: typeof config?.outputSummary === 'string' ? config.outputSummary : undefined,
     inputSchema: parseJson(row.input_schema, null),
     outputSchema: parseJson(row.output_schema, null)
   }
@@ -210,4 +328,11 @@ export function edgeRowToWorkflowEdge(row: WorkflowEdgeRow): WorkflowEdge {
     target: row.target_node_key,
     branch: row.branch
   }
+}
+
+function inferWorkflowType(graph: WorkflowGraph) {
+  const raw = `${graph.intent ?? ''} ${graph.name ?? ''} ${graph.description ?? ''}`.toLowerCase()
+  if (raw.includes('document_summary') || raw.includes('文档总结')) return 'document_summary'
+  if (raw.includes('financial') || raw.includes('财务') || raw.includes('财报') || raw.includes('risk')) return 'financial_analysis'
+  return graph.intent || 'general_workflow'
 }

@@ -1,6 +1,6 @@
-import { TraceMindTool } from '../types/tool'
 import { env } from '../config/env'
 import { callLLM } from '../services/llm.service'
+import { TraceMindTool } from '../types/tool'
 
 const summaryLLMTool: TraceMindTool = {
   name: 'summary_llm',
@@ -12,7 +12,8 @@ const summaryLLMTool: TraceMindTool = {
           [
             {
               role: 'system',
-              content: '你是 TraceMind 的风险总结工具。请基于工作流上下文输出简洁、结构化的中文总结。'
+              content:
+                '你是 TraceMind 的文档与工作流总结工具。请基于工作流上下文输出简洁、结构化的中文总结；不要编造上下文中没有的数据。'
             },
             {
               role: 'user',
@@ -55,19 +56,48 @@ const summaryLLMTool: TraceMindTool = {
     context.mockUsage.push({ tool: 'summary_llm', reason: env.mockMode ? 'MOCK_MODE=true' : 'LLM fallback enabled' })
     return {
       success: true,
-      output: {
-        summary: '该财报整体收入保持增长，但现金流和负债结构值得关注。短期建议优先复核经营性现金流、应收账款和债务期限安排。',
-        mocked: true,
-        provider: 'mock',
-        bullets: [
-          '收入增长具备积极信号，但利润质量需要结合现金流验证。',
-          '负债率偏高，需关注融资成本和偿债压力。',
-          '建议补充同行业对比和历史趋势分析。'
-        ]
-      },
-      message: '风险总结生成完成'
+      output: buildFallbackSummary(context),
+      message: '总结生成完成'
     }
   }
+}
+
+function buildFallbackSummary(context: Parameters<TraceMindTool['run']>[0]) {
+  const text = collectParsedText(context)
+  if (text.trim()) {
+    return {
+      summary: text.replace(/\s+/g, ' ').slice(0, 700),
+      mocked: true,
+      provider: 'mock',
+      bullets: splitSentences(text).slice(0, 4)
+    }
+  }
+
+  return {
+    summary: '当前上下文没有足够的可总结正文。请上传可解析的 PDF、文本或 Markdown 文件后重试。',
+    mocked: true,
+    provider: 'mock',
+    bullets: ['未获得足够正文。', '建议确认文件是否可复制文本，或换用文本版文件。']
+  }
+}
+
+function collectParsedText(context: Parameters<TraceMindTool['run']>[0]) {
+  const chunks: string[] = []
+  for (const output of Object.values(context.nodeOutputs)) {
+    if (output && typeof output === 'object' && typeof (output as { text?: unknown }).text === 'string') {
+      chunks.push((output as { text: string }).text)
+    }
+  }
+  return chunks.join('\n\n')
+}
+
+function splitSentences(text: string) {
+  return text
+    .replace(/\r\n/g, '\n')
+    .split(/[。！？\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => (item.length > 120 ? `${item.slice(0, 120)}...` : item))
 }
 
 export default summaryLLMTool

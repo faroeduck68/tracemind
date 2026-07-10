@@ -6,6 +6,7 @@ type ExtractOutput = {
   sourceNode: string
   metrics: Record<string, unknown>
   warnings: string[]
+  error?: string
   mocked: boolean
   extractor: string
 }
@@ -18,15 +19,19 @@ const financialExtractTool: TraceMindTool = {
 
     if (!text.trim()) {
       return {
-        success: true,
+        success: false,
         output: {
           sourceNode: 'none',
           metrics: {},
           warnings: ['未找到可用于提取的真实文本。'],
+          error: '未识别到财务数据',
           mocked: false,
           extractor: 'empty-real-input'
         } satisfies ExtractOutput,
-        message: '未找到可提取的真实文本'
+        message: '未识别到财务数据，无法完成有效分析',
+        errorMessage: '未识别到财务数据',
+        businessFailure: true,
+        reason: '上传文件没有可供财务指标提取的正文。'
       }
     }
 
@@ -54,12 +59,32 @@ const financialExtractTool: TraceMindTool = {
         )
         const parsed = parseLlmJson<{ metrics?: Record<string, unknown>; warnings?: string[] }>(result.content)
 
+        const metrics = parsed.metrics ?? {}
+        const warnings = Array.isArray(parsed.warnings) ? parsed.warnings : []
+        if (Object.keys(metrics).length === 0) {
+          return {
+            success: false,
+            output: {
+              sourceNode: 'parsed_text',
+              metrics: {},
+              warnings: warnings.length ? warnings : ['未提取到指标，文件可能不是财务报表。'],
+              error: '未识别到财务数据',
+              mocked: false,
+              extractor: `llm:${result.model}`
+            } satisfies ExtractOutput,
+            message: '未识别到财务数据，无法完成有效分析',
+            errorMessage: '未识别到财务数据',
+            businessFailure: true,
+            reason: '解析文本中没有利润表、资产负债表、现金流量表或可用财务指标。'
+          }
+        }
+
         return {
           success: true,
           output: {
             sourceNode: 'parsed_text',
-            metrics: parsed.metrics ?? {},
-            warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+            metrics,
+            warnings,
             mocked: false,
             extractor: `llm:${result.model}`
           } satisfies ExtractOutput,
@@ -86,15 +111,19 @@ const financialExtractTool: TraceMindTool = {
     context.mockUsage.push({ tool: 'financial_extract_tool', reason: env.mockMode ? 'MOCK_MODE=true' : 'LLM fallback enabled' })
 
     return {
-      success: true,
+      success: false,
       output: {
         sourceNode: 'fallback',
         metrics: {},
         warnings: ['已启用 fallback，但未编造固定财务指标。'],
+        error: '未识别到财务数据',
         mocked: true,
         extractor: 'fallback-empty'
       } satisfies ExtractOutput,
-      message: '财务指标提取 fallback 完成'
+      message: '未识别到财务数据，无法完成有效分析',
+      errorMessage: '未识别到财务数据',
+      businessFailure: true,
+      reason: 'fallback 不会编造财务指标，因此该文件不适合当前财务分析工作流。'
     }
   }
 }

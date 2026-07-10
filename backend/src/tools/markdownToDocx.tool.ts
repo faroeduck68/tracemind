@@ -7,7 +7,7 @@ const markdownToDocxTool: TraceMindTool = {
   name: 'markdown_to_docx_tool',
   displayName: 'Word 导出工具',
   async run(context) {
-    const report = context.nodeOutputs.report as { markdown?: string } | undefined
+    const report = findMarkdownOutput(context)
     const hasContent = Boolean(report?.markdown)
 
     if (env.useRealDocxExport && !env.mockMode && !env.allowMockFallback) {
@@ -38,6 +38,12 @@ const markdownToDocxTool: TraceMindTool = {
       message: 'Word 报告导出完成（Mock）'
     }
   }
+}
+
+function findMarkdownOutput(context: Parameters<TraceMindTool['run']>[0]) {
+  return Object.values(context.nodeOutputs).find(
+    (output) => output && typeof output === 'object' && typeof (output as { markdown?: unknown }).markdown === 'string'
+  ) as { markdown?: string } | undefined
 }
 
 export default markdownToDocxTool

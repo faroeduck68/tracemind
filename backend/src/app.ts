@@ -12,6 +12,8 @@ import { fileRouter } from './routes/file.routes'
 import { knowledgeRouter } from './routes/knowledge.routes'
 import { llmRouter } from './routes/llm.routes'
 import { memoryRouter } from './routes/memory.routes'
+import { mcpServerRouter } from './routes/mcpServer.routes'
+import { secretRouter } from './routes/secret.routes'
 import { settingRouter } from './routes/setting.routes'
 import { templateRouter } from './routes/template.routes'
 import { toolRouter } from './routes/tool.routes'
@@ -37,10 +39,12 @@ app.use('/api/llm', llmRouter)
 app.use('/api/runs', traceRouter)
 app.use('/api/files', fileRouter)
 app.use('/api/tools', toolRouter)
+app.use('/api/mcp-servers', mcpServerRouter)
 app.use('/api/templates', templateRouter)
 app.use('/api/knowledge-bases', knowledgeRouter)
 app.use('/api/memories', memoryRouter)
 app.use('/api/settings', settingRouter)
+app.use('/api/secrets', secretRouter)
 
 app.use(notFoundMiddleware)
 app.use(errorMiddleware)

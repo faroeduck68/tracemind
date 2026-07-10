@@ -1,4 +1,4 @@
-import { createTraceStep, finishTraceStepFailed, finishTraceStepSuccess } from '../models/traceStep.model'
+import { createTraceStep, finishTraceStep, finishTraceStepFailed } from '../models/traceStep.model'
 import { updateToolCallStats } from '../models/tool.model'
 import { finishToolCallLog } from '../models/toolCallLog.model'
 import { analyzeFailure } from '../services/failureAnalysis.service'
@@ -41,11 +41,18 @@ export async function afterNodeTraceHook(ctx: HookContext): Promise<HookResult |
   const latencyMs = Number(ctx.metadata?.latencyMs ?? Date.now() - (state.nodeStartedAt ?? Date.now()))
 
   if (state.traceStepId && !state.traceFinished) {
-    await finishTraceStepSuccess(state.traceStepId, ctx.output, latencyMs)
+    const status = ctx.metadata?.nodeResultStatus === 'partial_success' ? 'partial_success' : 'success'
+    const errorMessage =
+      typeof ctx.metadata?.nodeResultErrorMessage === 'string'
+        ? ctx.metadata.nodeResultErrorMessage
+        : typeof ctx.metadata?.nodeResultReason === 'string'
+          ? ctx.metadata.nodeResultReason
+          : undefined
+    await finishTraceStep(state.traceStepId, status, ctx.output, latencyMs, errorMessage)
     state.traceFinished = true
   }
 
-  workflowContext.traces.push({ nodeId: ctx.nodeId, status: 'success', output: ctx.output })
+  workflowContext.traces.push({ nodeId: ctx.nodeId, status: ctx.metadata?.nodeResultStatus ?? 'success', output: ctx.output })
 
   return {
     outcome: 'success',
@@ -65,7 +72,12 @@ export async function nodeErrorAnalysisHook(ctx: HookContext): Promise<HookResul
     const state = getNodeState(workflowContext, ctx.nodeId)
 
     if (state.traceStepId && !state.traceFinished) {
-      await finishTraceStepFailed(state.traceStepId, normalizedError.message, failureAnalysis, latencyMs)
+      await finishTraceStepFailed(
+        state.traceStepId,
+        normalizedError.message,
+        { failureAnalysis, toolOutput: ctx.output },
+        latencyMs
+      )
       state.traceFinished = true
     }
 

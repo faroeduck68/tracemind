@@ -14,10 +14,14 @@ export type WorkflowNode = {
   tool: string
   toolName?: string
   displayName?: string
+  toolReason?: string
+  roleInWorkflow?: string
   confidence: number
   reason: string
-  candidateTools?: Array<{ name: string; score: number }>
+  candidateTools?: Array<{ name: string; score: number; displayName?: string; reason?: string }>
   config?: unknown
+  inputSummary?: string
+  outputSummary?: string
   inputSchema?: unknown
   outputSchema?: unknown
 }
@@ -36,6 +40,7 @@ export type WorkflowGraph = {
   sourceType?: string
   originalQuery?: string
   intent: string
+  workflowType?: string
   confidence: number
   status?: string
   nodes: WorkflowNode[]

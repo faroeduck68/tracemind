@@ -1,5 +1,6 @@
 import { ResultSetHeader } from 'mysql2/promise'
 import { execute } from '../config/db'
+import { redactSecrets } from '../utils/redact'
 import { stringifyJson } from '../utils/json'
 
 export async function createToolCallLog(input: {
@@ -12,7 +13,7 @@ export async function createToolCallLog(input: {
     `INSERT INTO tool_call_logs
      (run_id, node_key, tool_name, input_data, status)
      VALUES (?, ?, ?, ?, 'running')`,
-    [input.runId ?? null, input.nodeKey ?? null, input.toolName, stringifyJson(input.inputData ?? null)]
+    [input.runId ?? null, input.nodeKey ?? null, input.toolName, stringifyJson(redactSecrets(input.inputData ?? null))]
   )
 
   return result.insertId
@@ -31,7 +32,7 @@ export async function finishToolCallLog(input: {
      WHERE id = ?`,
     [
       input.status,
-      stringifyJson(input.outputData ?? null),
+      stringifyJson(redactSecrets(input.outputData ?? null)),
       input.errorMessage ?? null,
       input.latencyMs,
       input.id

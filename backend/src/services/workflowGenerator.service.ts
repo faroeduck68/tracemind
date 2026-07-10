@@ -1,9 +1,12 @@
 import { WorkflowGraph, WorkflowNode } from '../types/workflow'
 import { triggerHooks } from '../hooks/hookRegistry'
 import { toolRegistry } from '../tools'
+import { listTools } from '../models/tool.model'
 import { validateDag } from '../utils/dagValidator'
 import { env } from '../config/env'
 import { callLLM, parseLlmJson } from './llm.service'
+import { classifyDocumentFiles, DocumentClassification } from './documentClassifier.service'
+import { parseJson } from '../utils/json'
 
 const financeKeywords = ['财报', '财务', '风险', '利润', '收入', '现金流']
 const weatherKeywords = ['天气', '气温', 'weather', 'temperature', 'forecast']
@@ -13,12 +16,24 @@ const linearReportKeywords = ['Word 报告', 'Word报告', '生成报告', '导�
 const branchKeywords = ['知识检索', '行业知识', '综合总结', 'RAG', 'rag']
 
 type FinanceTemplate = 'linear' | 'branch' | 'none'
+type PlannerTool = {
+  name: string
+  displayName: string
+  description?: string | null
+  type?: string
+  source?: string | null
+  mcpServerId?: number | null
+  mcpToolName?: string | null
+  inputSchema?: unknown
+  outputSchema?: unknown
+}
 
 const toolDisplayNames: Record<string, string> = {
   pdf_parse_tool: 'PDF解析工具',
   financial_extract_tool: '财务指标提取工具',
   financial_risk_tool: '财务风险分析工具',
   risk_summary_tool: '风险总结工具',
+  document_classify_tool: '文档类型识别工具',
   report_output_tool: '报告输出工具',
   report_generate_tool: '报告生成工具',
   markdown_to_docx_tool: 'Word导出工具',
@@ -59,7 +74,26 @@ const candidateToolsByTool: Record<string, Array<{ name: string; score: number }
     { name: 'report_output_tool', score: 0.92 },
     { name: 'summary_llm', score: 0.68 },
     { name: 'general_qa_tool', score: 0.4 }
+  ],
+  document_classify_tool: [
+    { name: 'document_classify_tool', score: 0.95 },
+    { name: 'summary_llm', score: 0.66 },
+    { name: 'general_qa_tool', score: 0.45 }
+  ],
+  summary_llm: [
+    { name: 'summary_llm', score: 0.9 },
+    { name: 'general_qa_tool', score: 0.58 },
+    { name: 'risk_summary_tool', score: 0.48 }
   ]
+}
+
+const toolNameAliases: Record<string, string> = {
+  report_output: 'report_output_tool'
+}
+
+function canonicalToolName(value: unknown) {
+  const normalized = String(value ?? '').replace(/\s+/g, '_')
+  return toolNameAliases[normalized] ?? normalized
 }
 
 // 根据 query 选择财报模板：
@@ -74,9 +108,15 @@ export function selectFinanceTemplate(query: string): FinanceTemplate {
   return 'none'
 }
 
-export async function generateWorkflowFromQuery(query: string, memories: unknown[] = []): Promise<WorkflowGraph> {
-  if (isWeatherQuery(query) && !('weather_tool' in toolRegistry)) {
-    throw new Error('当前系统没有天气查询工具，无法实时查询天气。可以为系统新增 weather_tool 后支持该能力。')
+export async function generateWorkflowFromQuery(
+  query: string,
+  memories: unknown[] = [],
+  options: { files?: unknown[] } = {}
+): Promise<WorkflowGraph> {
+  const availableTools = await getPlannerTools()
+  const weatherTool = findWeatherTool(availableTools)
+  if (isWeatherQuery(query) && !weatherTool) {
+    throw new Error('当前系统没有天气查询工具，无法实时查询天气。可以为系统新增 weather_query_tool 后支持该能力。')
   }
 
   const promptContext = { memories }
@@ -96,13 +136,37 @@ export async function generateWorkflowFromQuery(query: string, memories: unknown
 
   let graph: WorkflowGraph
   let source = 'rule_engine'
+  const files = Array.isArray(options.files) ? options.files : []
+  const documentClassification = files.length ? await classifyDocumentFiles(files) : null
 
-  if (shouldUseMockWorkflowGenerator()) {
+  if (isWeatherQuery(query) && weatherTool && shouldUseMockWorkflowGenerator()) {
+    graph = buildSingleToolWorkflow(query, weatherTool, memories)
+    source = 'database_tool_rule_engine'
+  } else if (documentClassification?.type === 'unknown') {
+    if (wantsDocumentSummary(query)) {
+      graph = buildDocumentSummaryWorkflow(query, memories, documentClassification)
+      source = 'user_clarified_document_summary'
+    } else if (wantsFinancialAnalysis(query)) {
+      graph = buildLinearFinanceWorkflow(query, memories)
+      source = 'user_clarified_financial_analysis'
+    } else {
+      throw new Error('无法判断文档类型。请告诉我你想对这个文件做“文档总结”还是“财务分析”？')
+    }
+  } else if (documentClassification?.type === 'document' && wantsFinancialAnalysis(query)) {
+    graph = buildLinearFinanceWorkflow(query, memories)
+    source = 'user_requested_financial_analysis'
+  } else if (documentClassification?.type === 'document') {
+    graph = buildDocumentSummaryWorkflow(query, memories, documentClassification)
+    source = 'document_classifier'
+  } else if (documentClassification?.type === 'financial') {
+    graph = buildLinearFinanceWorkflow(query, memories)
+    source = 'document_classifier'
+  } else if (shouldUseMockWorkflowGenerator()) {
     graph = buildRuleWorkflow(query, memories)
     source = 'mock_rule_engine'
   } else {
     try {
-      graph = await generateWorkflowWithLLM(query, memories)
+      graph = await generateWorkflowWithLLM(query, memories, availableTools)
       source = 'llm'
     } catch (error) {
       if (!env.allowMockFallback) {
@@ -124,10 +188,18 @@ export async function generateWorkflowFromQuery(query: string, memories: unknown
     throw new Error(afterGenerateResult.reason ?? 'Generated workflow was blocked by hooks.')
   }
 
-  graph = normalizeToolFields(afterGenerateContext.input as WorkflowGraph)
+  graph = normalizeToolFields(afterGenerateContext.input as WorkflowGraph, availableTools)
 
   validateDag(graph.nodes, graph.edges)
   return graph
+}
+
+function wantsDocumentSummary(query: string) {
+  return ['文档总结', '总结文档', '内容摘要', '总结', '概括', '提炼'].some((keyword) => query.includes(keyword))
+}
+
+function wantsFinancialAnalysis(query: string) {
+  return ['财务分析', '财报分析', '分析财报', '财务风险', '财务指标'].some((keyword) => query.includes(keyword))
 }
 
 function isWeatherQuery(query: string) {
@@ -135,17 +207,33 @@ function isWeatherQuery(query: string) {
   return weatherKeywords.some((keyword) => normalized.includes(keyword))
 }
 
-function normalizeToolFields(graph: WorkflowGraph): WorkflowGraph {
+function normalizeToolFields(graph: WorkflowGraph, availableTools: PlannerTool[] = []): WorkflowGraph {
+  const displayNameMap = Object.fromEntries(availableTools.map((tool) => [tool.name, tool.displayName]))
+  const toolByName = Object.fromEntries(availableTools.map((tool) => [tool.name, tool]))
+  const fallbackCandidates = availableTools.slice(0, 4).map((tool, index) => ({
+    name: tool.name,
+    score: Math.max(0.55, 0.9 - index * 0.08)
+  }))
+
   return {
     ...graph,
     nodes: graph.nodes.map((node) => {
-      const toolName = String(node.toolName ?? node.tool).replace(/\s+/g, '_')
+      const toolName = canonicalToolName(node.toolName ?? node.tool)
+      const candidateTools = node.candidateTools?.length ? node.candidateTools : candidateToolsByTool[toolName] ?? fallbackCandidates
       return {
         ...node,
         tool: toolName,
         toolName,
-        displayName: node.displayName ?? toolDisplayNames[toolName] ?? toolName,
-        candidateTools: node.candidateTools?.length ? node.candidateTools : candidateToolsByTool[toolName] ?? []
+        displayName: node.displayName ?? displayNameMap[toolName] ?? toolDisplayNames[toolName] ?? toolName,
+        toolReason: node.toolReason ?? `${displayNameMap[toolName] ?? toolDisplayNames[toolName] ?? toolName} 与当前节点职责匹配度最高。`,
+        roleInWorkflow: node.roleInWorkflow,
+        inputSchema: node.inputSchema ?? toolByName[toolName]?.inputSchema,
+        outputSchema: node.outputSchema ?? toolByName[toolName]?.outputSchema,
+        candidateTools: candidateTools.map((tool) => ({
+          ...tool,
+          displayName: displayNameMap[tool.name] ?? toolDisplayNames[tool.name] ?? tool.name,
+          reason: tool.name === toolName ? '当前绑定工具，综合评分最高。' : '作为同类候选工具参与评分。'
+        }))
       }
     })
   }
@@ -164,12 +252,7 @@ function buildRuleWorkflow(query: string, memories: unknown[]) {
       : buildGeneralWorkflow(query, memories)
 }
 
-async function generateWorkflowWithLLM(query: string, memories: unknown[]): Promise<WorkflowGraph> {
-  const availableTools = Object.entries(toolRegistry).map(([key, tool]) => ({
-    name: key,
-    displayName: tool.displayName
-  }))
-
+async function generateWorkflowWithLLM(query: string, memories: unknown[], availableTools: PlannerTool[]): Promise<WorkflowGraph> {
   const response = await callLLM(
     [
       {
@@ -178,7 +261,7 @@ async function generateWorkflowWithLLM(query: string, memories: unknown[]): Prom
           'You are TraceMind workflow generator. Return only valid JSON.',
           'Generate a DAG workflow for the user query.',
           'Every node.tool must be one of the available tool names.',
-          'Keep the existing tool run(context) contract in mind; do not invent new tools.',
+          'Use configurable HTTP or LLM tools when their schemas match the task; do not invent new tools.',
           'Required top-level JSON fields: name, description, sourceType, originalQuery, intent, confidence, status, nodes, edges.',
           'Node fields: id, type, label, subLabel, icon, position{x,y}, status, tone, tool, confidence, reason.',
           'Edge fields: id, source, target, optional branch.',
@@ -199,7 +282,7 @@ async function generateWorkflowWithLLM(query: string, memories: unknown[]): Prom
   )
 
   const graph = normalizeGeneratedGraph(parseLlmJson<WorkflowGraph>(response.content), query)
-  validateGeneratedToolNames(graph)
+  validateGeneratedToolNames(graph, availableTools)
   validateDag(graph.nodes, graph.edges)
   return graph
 }
@@ -228,7 +311,7 @@ function normalizeGeneratedGraph(graph: WorkflowGraph, query: string): WorkflowG
       },
       status: node.status ?? 'idle',
       tone: node.tone ?? 'blue',
-      tool: String(node.tool),
+      tool: canonicalToolName(node.tool),
       confidence: Number(node.confidence ?? 0.75),
       reason: String(node.reason ?? 'Generated by LLM.')
     })),
@@ -241,14 +324,63 @@ function normalizeGeneratedGraph(graph: WorkflowGraph, query: string): WorkflowG
   }
 }
 
-function validateGeneratedToolNames(graph: WorkflowGraph) {
+function validateGeneratedToolNames(graph: WorkflowGraph, availableTools: PlannerTool[]) {
+  const allowed = new Set(availableTools.map((tool) => tool.name))
   const missingTools = graph.nodes
-    .map((node) => node.tool)
-    .filter((toolName) => !toolRegistry[toolName as keyof typeof toolRegistry])
+    .map((node) => canonicalToolName(node.tool))
+    .filter((toolName) => !allowed.has(toolName))
 
   if (missingTools.length > 0) {
     throw new Error(`LLM generated unknown tool(s): ${[...new Set(missingTools)].join(', ')}`)
   }
+}
+
+async function getPlannerTools(): Promise<PlannerTool[]> {
+  try {
+    const rows = await listTools()
+    const enabled = rows
+      .filter((tool) => tool.enabled === 1)
+      .map((tool) => ({
+        name: tool.name,
+        displayName: tool.display_name,
+        description: tool.description,
+        type: tool.type,
+        source: tool.source,
+        mcpServerId: tool.mcp_server_id,
+        mcpToolName: tool.mcp_tool_name,
+        inputSchema: parseJson(tool.input_schema, null),
+        outputSchema: parseJson(tool.output_schema, null)
+      }))
+    const configuredNames = new Set(rows.map((tool) => tool.name))
+    const missingBuiltinTools = Object.entries(toolRegistry)
+      .filter(([key]) => !configuredNames.has(key))
+      .map(([key, tool]) => ({
+        name: key,
+        displayName: tool.displayName,
+        type: 'builtin',
+        source: 'registry'
+      }))
+
+    const merged = [...enabled, ...missingBuiltinTools]
+    if (merged.length) return merged
+  } catch {
+    // Fall back to registry when database is unavailable during local development.
+  }
+
+  return Object.entries(toolRegistry)
+    .filter(([key]) => key !== 'report_output')
+    .map(([key, tool]) => ({
+      name: key,
+      displayName: tool.displayName,
+      type: 'builtin'
+    }))
+}
+
+function findWeatherTool(tools: PlannerTool[]) {
+  return tools.find((tool) => {
+    const text = `${tool.name} ${tool.displayName} ${tool.description ?? ''}`.toLowerCase()
+    return weatherKeywords.some((keyword) => text.includes(keyword.toLowerCase())) || text.includes('天气')
+  })
 }
 
 function withIdle(nodes: WorkflowNode[]): WorkflowNode[] {
@@ -515,6 +647,110 @@ function buildFinancialWorkflow(query: string, memories: unknown[]): WorkflowGra
   }
 }
 
+function buildDocumentSummaryWorkflow(query: string, memories: unknown[], classification?: DocumentClassification): WorkflowGraph {
+  const nodes = withIdle([
+    {
+      id: 'start',
+      type: 'input',
+      label: '用户输入',
+      subLabel: '接收分析目标',
+      icon: 'CirclePlay',
+      position: { x: 80, y: 220 },
+      status: 'idle',
+      tone: 'green',
+      tool: 'user_input',
+      confidence: 0.96,
+      reason: '接收用户对上传文档的分析或总结需求，作为工作流入口。'
+    },
+    {
+      id: 'parse',
+      type: 'file_read',
+      label: 'PDF解析',
+      subLabel: '读取上传文档正文',
+      icon: 'FileText',
+      position: { x: 300, y: 220 },
+      status: 'idle',
+      tone: 'green',
+      tool: 'pdf_parse_tool',
+      confidence: 0.92,
+      reason: '文档总结需要先解析上传文件内容，得到可供后续总结的文本。'
+    },
+    {
+      id: 'classify',
+      type: 'document_classify',
+      label: '文档类型识别',
+      subLabel: '判断文档是否适合财务分析',
+      icon: 'Bot',
+      position: { x: 520, y: 220 },
+      status: 'idle',
+      tone: 'blue',
+      tool: 'document_classify_tool',
+      confidence: classification?.confidence ?? 0.82,
+      reason: classification?.reason ?? '在总结前确认文档类型，避免把普通报告误送入财务风险分析流程。',
+      config: {
+        generationClassification: classification
+      }
+    },
+    {
+      id: 'content_summary',
+      type: 'summary',
+      label: '内容摘要',
+      subLabel: '提炼正文关键信息',
+      icon: 'ClipboardCheck',
+      position: { x: 740, y: 220 },
+      status: 'idle',
+      tone: 'amber',
+      tool: 'summary_llm',
+      confidence: 0.88,
+      reason: '普通报告、设计说明或图纸说明更适合先提炼核心内容，而不是提取财务指标。'
+    },
+    {
+      id: 'structured_summary',
+      type: 'structured_summary',
+      label: '结构化总结',
+      subLabel: '整理要点、结论与建议',
+      icon: 'ClipboardList',
+      position: { x: 960, y: 220 },
+      status: 'idle',
+      tone: 'violet',
+      tool: 'summary_llm',
+      confidence: 0.86,
+      reason: '将摘要结果组织为用户可读的结构化报告，方便继续追问。'
+    },
+    {
+      id: 'output',
+      type: 'output',
+      label: '报告输出',
+      subLabel: '返回总结结果',
+      icon: 'PanelRightOpen',
+      position: { x: 1180, y: 220 },
+      status: 'idle',
+      tone: 'cyan',
+      tool: 'report_output_tool',
+      confidence: 0.86,
+      reason: '输出最终文档总结，并保留结构化结果供前端和追问使用。'
+    }
+  ])
+
+  return {
+    name: '文档总结 Workflow',
+    description: `根据上传文件自动生成的文档总结流程。已参考 ${memories.length} 条记忆。`,
+    sourceType: 'generated',
+    originalQuery: query,
+    intent: 'document_summary_workflow',
+    confidence: classification?.confidence ?? 0.82,
+    status: 'draft',
+    nodes,
+    edges: [
+      { id: 'e-start-parse', source: 'start', target: 'parse' },
+      { id: 'e-parse-classify', source: 'parse', target: 'classify' },
+      { id: 'e-classify-content-summary', source: 'classify', target: 'content_summary' },
+      { id: 'e-content-structured', source: 'content_summary', target: 'structured_summary' },
+      { id: 'e-structured-output', source: 'structured_summary', target: 'output' }
+    ]
+  }
+}
+
 function buildGeneralWorkflow(query: string, memories: unknown[]): WorkflowGraph {
   const nodes = withIdle([
     {
@@ -584,6 +820,67 @@ function buildGeneralWorkflow(query: string, memories: unknown[]): WorkflowGraph
       { id: 'e-start-intent', source: 'start', target: 'intent' },
       { id: 'e-intent-summary', source: 'intent', target: 'summary' },
       { id: 'e-summary-output', source: 'summary', target: 'output' }
+    ]
+  }
+}
+
+function buildSingleToolWorkflow(query: string, tool: PlannerTool, memories: unknown[]): WorkflowGraph {
+  const nodes = withIdle([
+    {
+      id: 'start',
+      type: 'input',
+      label: '用户输入',
+      subLabel: '接收查询条件',
+      icon: 'CirclePlay',
+      position: { x: 80, y: 220 },
+      status: 'idle',
+      tone: 'green',
+      tool: 'user_input',
+      confidence: 0.96,
+      reason: '接收用户自然语言需求，作为可配置工具调用的入口。'
+    },
+    {
+      id: 'tool_call',
+      type: tool.type === 'http' ? 'http_tool' : tool.type === 'llm' ? 'llm_tool' : 'tool',
+      label: tool.displayName,
+      subLabel: tool.description ?? '执行数据库配置工具',
+      icon: tool.type === 'http' ? 'CloudCog' : 'Bot',
+      position: { x: 320, y: 220 },
+      status: 'idle',
+      tone: 'blue',
+      tool: tool.name,
+      confidence: 0.9,
+      reason: `数据库中已启用 ${tool.displayName}，可直接响应该查询。`,
+      inputSchema: tool.inputSchema,
+      outputSchema: tool.outputSchema
+    },
+    {
+      id: 'output',
+      type: 'output',
+      label: '结果输出',
+      subLabel: '返回工具结果',
+      icon: 'PanelRightOpen',
+      position: { x: 560, y: 220 },
+      status: 'idle',
+      tone: 'cyan',
+      tool: 'report_output_tool',
+      confidence: 0.86,
+      reason: '将工具返回结果整理为前端可展示的最终输出。'
+    }
+  ])
+
+  return {
+    name: `${tool.displayName} Workflow`,
+    description: `根据自然语言需求自动生成。已参考 ${memories.length} 条记忆。`,
+    sourceType: 'generated',
+    originalQuery: query,
+    intent: `${tool.name}_workflow`,
+    confidence: 0.86,
+    status: 'draft',
+    nodes,
+    edges: [
+      { id: 'e-start-tool', source: 'start', target: 'tool_call' },
+      { id: 'e-tool-output', source: 'tool_call', target: 'output' }
     ]
   }
 }

@@ -5,12 +5,12 @@ const reportGenerateTool: TraceMindTool = {
   name: 'report_generate_tool',
   displayName: '报告生成工具',
   async run(context) {
-    const extract = context.nodeOutputs.extract as { metrics?: Record<string, unknown> } | undefined
-    const risk = context.nodeOutputs.risk as { riskLevel?: string; risks?: string[]; suggestions?: string[] } | undefined
+    const extract = findMetricsOutput(context)
+    const risk = findRiskOutput(context)
 
     const metrics = extract?.metrics ?? {}
     const risks = risk?.risks ?? []
-    const suggestions = risk?.suggestions ?? []
+    const suggestions = risk?.suggestions ?? (risk?.recommendation ? [risk.recommendation] : [])
 
     const markdown = [
       '# 财务风险分析报告',
@@ -32,6 +32,24 @@ const reportGenerateTool: TraceMindTool = {
       message: 'Markdown 报告生成完成'
     }
   }
+}
+
+function findMetricsOutput(context: Parameters<TraceMindTool['run']>[0]) {
+  return Object.values(context.nodeOutputs).find(
+    (output) => output && typeof output === 'object' && (output as { metrics?: unknown }).metrics
+  ) as { metrics?: Record<string, unknown> } | undefined
+}
+
+function findRiskOutput(context: Parameters<TraceMindTool['run']>[0]) {
+  return Object.values(context.nodeOutputs).find(
+    (output) =>
+      output &&
+      typeof output === 'object' &&
+      (typeof (output as { riskLevel?: unknown }).riskLevel === 'string' ||
+        Array.isArray((output as { risks?: unknown }).risks) ||
+        Array.isArray((output as { suggestions?: unknown }).suggestions) ||
+        typeof (output as { recommendation?: unknown }).recommendation === 'string')
+  ) as { riskLevel?: string; risks?: string[]; suggestions?: string[]; recommendation?: string } | undefined
 }
 
 export default reportGenerateTool

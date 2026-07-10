@@ -3,22 +3,46 @@ CREATE DATABASE IF NOT EXISTS tracemind CHARACTER SET utf8mb4 COLLATE utf8mb4_un
 
 USE tracemind;
 
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(100) NOT NULL UNIQUE,
+  display_name VARCHAR(100),
+  endpoint VARCHAR(500) NOT NULL,
+  transport VARCHAR(50) DEFAULT 'http',
+  enabled TINYINT DEFAULT 1,
+  status VARCHAR(30) DEFAULT 'unknown',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MCP Server configuration';
+
 CREATE TABLE IF NOT EXISTS tools (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '工具主键ID',
   name VARCHAR(100) NOT NULL UNIQUE COMMENT '工具唯一名称，后端 Tool Registry 使用',
   display_name VARCHAR(100) NOT NULL COMMENT '工具展示名称，前端工具库显示使用',
+  `type` VARCHAR(30) DEFAULT 'builtin' COMMENT '工具类型：builtin 内置工具，http HTTP API 工具，llm Prompt 工具',
+  source VARCHAR(30) DEFAULT 'local',
+  mcp_server_id BIGINT NULL,
+  mcp_tool_name VARCHAR(100) NULL,
   version VARCHAR(50) DEFAULT 'v1.0.0' COMMENT '工具版本号',
   category VARCHAR(50) COMMENT '工具分类，如输入、数据处理、数据分析、内容生成',
   description TEXT COMMENT '工具能力描述',
   enabled TINYINT DEFAULT 1 COMMENT '是否启用：1启用，0禁用',
+  risk_level VARCHAR(30) DEFAULT 'low' COMMENT '风险等级：low、medium、high',
   success_rate DECIMAL(5,2) DEFAULT 0 COMMENT '历史成功率，百分比数值',
   avg_latency_ms INT DEFAULT 0 COMMENT '平均调用耗时，单位毫秒',
   call_count INT DEFAULT 0 COMMENT '累计调用次数',
   config_schema JSON COMMENT '工具配置 JSON Schema',
   input_schema JSON COMMENT '工具输入 JSON Schema',
   output_schema JSON COMMENT '工具输出 JSON Schema',
+  config_json JSON COMMENT '可配置工具运行配置，如 HTTP 请求或 LLM Prompt 模板',
+  auth_config JSON COMMENT '可配置工具鉴权配置，接口返回时必须脱敏',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+  INDEX idx_tools_mcp_server_id (mcp_server_id),
+  CONSTRAINT fk_tools_mcp_server
+    FOREIGN KEY (mcp_server_id) REFERENCES mcp_servers(id)
+    ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工具库表，记录可被工作流节点调用的工具';
 
 CREATE TABLE IF NOT EXISTS workflows (
@@ -28,11 +52,17 @@ CREATE TABLE IF NOT EXISTS workflows (
   source_type VARCHAR(50) DEFAULT 'manual' COMMENT '来源类型：manual手动创建，generated自然语言生成，template模板创建',
   original_query TEXT COMMENT '生成工作流时的原始自然语言需求',
   intent VARCHAR(100) COMMENT '识别出的任务意图',
+  workflow_type VARCHAR(80) COMMENT '工作流类型，如 financial_analysis、document_summary',
   confidence DECIMAL(5,4) COMMENT '工作流生成或意图识别置信度',
   status VARCHAR(30) DEFAULT 'draft' COMMENT '工作流状态：draft草稿，active启用，archived归档等',
+  node_count INT DEFAULT 0 COMMENT '工作流节点数量',
+  edge_count INT DEFAULT 0 COMMENT '工作流连线数量',
   workflow_json JSON COMMENT '完整工作流 JSON，适配前端节点和连线结构',
+  conversation_id VARCHAR(80) NULL COMMENT '关联的 Agent 会话 ID',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+  INDEX idx_workflows_conversation_id (conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作流主表，保存工作流基础信息和完整图结构';
 
 CREATE TABLE IF NOT EXISTS workflow_nodes (
@@ -82,9 +112,12 @@ CREATE TABLE IF NOT EXISTS workflow_edges (
 CREATE TABLE IF NOT EXISTS workflow_runs (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '运行记录主键ID',
   workflow_id BIGINT NOT NULL COMMENT '被运行的工作流ID',
+  conversation_id VARCHAR(80) NULL COMMENT '关联的 Agent 会话 ID',
   status VARCHAR(30) DEFAULT 'running' COMMENT '运行状态：running、success、failed',
   input_data JSON COMMENT '本次运行输入数据，如 query、files 等',
   output_data JSON COMMENT '本次运行最终输出数据',
+  file_ids JSON COMMENT '本次运行关联文件 ID 列表',
+  summary TEXT COMMENT '本次运行摘要，供历史列表和回放入口展示',
   total_latency_ms INT DEFAULT 0 COMMENT '总运行耗时，单位毫秒',
   total_tokens INT DEFAULT 0 COMMENT 'Token 消耗量，第一版可为0',
   error_message TEXT COMMENT '运行失败时的错误信息',
@@ -93,6 +126,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   finished_at DATETIME NULL COMMENT '结束运行时间',
 
   INDEX idx_workflow_runs_workflow_id (workflow_id),
+  INDEX idx_workflow_runs_conversation_id (conversation_id),
   CONSTRAINT fk_workflow_runs_workflow
     FOREIGN KEY (workflow_id) REFERENCES workflows(id)
     ON DELETE CASCADE
@@ -103,6 +137,7 @@ CREATE TABLE IF NOT EXISTS trace_steps (
   run_id BIGINT NOT NULL COMMENT '所属运行记录ID',
   workflow_id BIGINT NOT NULL COMMENT '所属工作流ID',
   node_key VARCHAR(100) COMMENT '对应节点业务ID',
+  step_order INT DEFAULT 0 COMMENT '节点执行顺序，从1开始',
   step_name VARCHAR(100) NOT NULL COMMENT '步骤名称，前端 TraceStep.stepName 使用',
   step_type VARCHAR(100) COMMENT '步骤类型，通常对应节点类型',
   status VARCHAR(30) DEFAULT 'running' COMMENT '步骤状态：running、success、failed、skipped',
@@ -110,7 +145,9 @@ CREATE TABLE IF NOT EXISTS trace_steps (
   reason TEXT COMMENT '步骤执行或工具选择原因',
   confidence DECIMAL(5,4) COMMENT '步骤置信度',
   input_data JSON COMMENT '步骤输入数据',
+  input_summary TEXT COMMENT '步骤输入摘要，用于回放列表快速浏览',
   output_data JSON COMMENT '步骤输出数据',
+  output_summary TEXT COMMENT '步骤输出摘要，用于回放列表快速浏览',
   error_message TEXT COMMENT '步骤失败时的错误信息',
   latency_ms INT COMMENT '步骤耗时，单位毫秒',
   started_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '步骤开始时间',
@@ -163,6 +200,20 @@ CREATE TABLE IF NOT EXISTS tool_call_logs (
     FOREIGN KEY (run_id) REFERENCES workflow_runs(id)
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工具调用日志表，记录每次工具真实调用过程';
+
+CREATE TABLE IF NOT EXISTS user_secrets (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '用户 Secret 主键ID',
+  user_id VARCHAR(80) NOT NULL COMMENT '用户ID，未来接入登录系统后使用真实用户ID',
+  name VARCHAR(100) NOT NULL COMMENT 'Secret 名称，例如 AMAP_API_KEY',
+  provider VARCHAR(100) COMMENT 'Secret 提供商，例如 amap、openweather',
+  encrypted_value TEXT NOT NULL COMMENT '加密后的 Secret 值，禁止明文保存',
+  masked_value VARCHAR(40) NOT NULL COMMENT '脱敏展示值，例如 ****8A3F',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+  UNIQUE KEY uq_user_secret_name (user_id, name),
+  INDEX idx_user_secrets_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户私有 Secret 表，用于 HTTP API 工具鉴权';
 
 CREATE TABLE IF NOT EXISTS workflow_templates (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '模板主键ID',
@@ -281,3 +332,31 @@ CREATE TABLE IF NOT EXISTS user_settings (
   settings_json JSON COMMENT '扩展设置 JSON',
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户设置表，第一版保存单用户全局设置';
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id VARCHAR(80) PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  model VARCHAR(100) NOT NULL,
+  status VARCHAR(30) DEFAULT 'active',
+  last_message TEXT NULL,
+  last_message_at DATETIME NULL,
+  total_tokens INT DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent 历史会话表';
+
+CREATE TABLE IF NOT EXISTS messages (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  conversation_id VARCHAR(80) NOT NULL,
+  role VARCHAR(30) NOT NULL,
+  content MEDIUMTEXT NOT NULL,
+  metadata_json JSON NULL,
+  model VARCHAR(100) NULL,
+  usage_json JSON NULL,
+  sequence INT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_messages_conversation_id (conversation_id),
+  CONSTRAINT fk_messages_conversation
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent 会话消息表';

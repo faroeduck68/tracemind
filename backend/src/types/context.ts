@@ -1,6 +1,7 @@
 export type WorkflowContext = {
   runId: number
   workflowId: number
+  userId?: string
   query?: string
   memories: unknown[]
   files: unknown[]

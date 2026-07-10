@@ -35,6 +35,7 @@ function candidateToolsFor(selectedToolName: string) {
     financial_extract_tool: ['financial_extract_tool', 'text_extract_tool', 'summary_llm', 'general_qa_tool'],
     financial_risk_tool: ['financial_risk_tool', 'risk_summary_tool', 'summary_llm', 'general_qa_tool'],
     risk_summary_tool: ['risk_summary_tool', 'financial_risk_tool', 'summary_llm', 'general_qa_tool'],
+    document_classify_tool: ['document_classify_tool', 'summary_llm', 'general_qa_tool'],
     report_output_tool: ['report_output_tool', 'summary_llm', 'general_qa_tool'],
     report_generate_tool: ['report_generate_tool', 'summary_llm', 'general_qa_tool'],
     markdown_to_docx_tool: ['markdown_to_docx_tool', 'report_output_tool', 'general_qa_tool']
@@ -47,6 +48,7 @@ function scoreByKeyword(query: string, toolName: string) {
   const isFinance = financeKeywords.some((keyword) => query.includes(keyword))
   if (toolName.includes('financial') && isFinance) return 0.95
   if (toolName.includes('risk') && isFinance) return 0.9
+  if (toolName.includes('document_classify')) return 0.88
   if (toolName.includes('pdf')) return isFinance ? 0.78 : 0.62
   if (toolName.includes('summary')) return 0.72
   return 0.35
@@ -55,6 +57,7 @@ function scoreByKeyword(query: string, toolName: string) {
 function scoreBySemantic(toolName: string) {
   if (toolName.includes('financial')) return 0.9
   if (toolName.includes('risk')) return 0.86
+  if (toolName.includes('document_classify')) return 0.88
   if (toolName.includes('summary')) return 0.82
   if (toolName.includes('pdf')) return 0.8
   return 0.55

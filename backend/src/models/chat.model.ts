@@ -7,6 +7,10 @@ export type ConversationRow = RowDataPacket & {
   title: string
   model: string
   status: string
+  last_message: string | null
+  last_message_at: string | null
+  total_tokens: number | null
+  message_count?: number
   created_at: string
   updated_at: string
 }
@@ -16,6 +20,7 @@ export type MessageRow = RowDataPacket & {
   conversation_id: string
   role: 'system' | 'user' | 'assistant'
   content: string
+  metadata_json: unknown
   model: string | null
   usage_json: unknown
   sequence: number | null
@@ -33,6 +38,9 @@ export async function ensureChatTables() {
       title VARCHAR(200) NOT NULL,
       model VARCHAR(100) NOT NULL,
       status VARCHAR(30) DEFAULT 'active',
+      last_message TEXT NULL,
+      last_message_at DATETIME NULL,
+      total_tokens INT DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -44,6 +52,7 @@ export async function ensureChatTables() {
       conversation_id VARCHAR(80) NOT NULL,
       role VARCHAR(30) NOT NULL,
       content MEDIUMTEXT NOT NULL,
+      metadata_json JSON NULL,
       model VARCHAR(100) NULL,
       usage_json JSON NULL,
       sequence INT NULL,
@@ -55,38 +64,62 @@ export async function ensureChatTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `)
 
-  await ensureMessageSequenceColumn()
+  await ensureConversationColumns()
+  await ensureMessageColumns()
 
   chatTablesReady = true
 }
 
-async function ensureMessageSequenceColumn() {
+async function ensureConversationColumns() {
+  const columns = await listColumns('conversations')
+  const migrations = [
+    ['last_message', `ALTER TABLE conversations ADD COLUMN last_message TEXT NULL AFTER status`],
+    ['last_message_at', `ALTER TABLE conversations ADD COLUMN last_message_at DATETIME NULL AFTER last_message`],
+    ['total_tokens', `ALTER TABLE conversations ADD COLUMN total_tokens INT DEFAULT 0 AFTER last_message_at`]
+  ] as const
+
+  for (const [column, sql] of migrations) {
+    if (!columns.has(column)) await execute(sql)
+  }
+}
+
+async function ensureMessageColumns() {
+  const columns = await listColumns('messages')
+  const migrations = [
+    ['metadata_json', `ALTER TABLE messages ADD COLUMN metadata_json JSON NULL AFTER content`],
+    ['sequence', `ALTER TABLE messages ADD COLUMN sequence INT NULL AFTER usage_json`]
+  ] as const
+
+  for (const [column, sql] of migrations) {
+    if (!columns.has(column)) await execute(sql)
+  }
+}
+
+async function listColumns(tableName: string) {
   const rows = await query<RowDataPacket[]>(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE()
-       AND TABLE_NAME = 'messages'
-       AND COLUMN_NAME = 'sequence'`
+       AND TABLE_NAME = ?`,
+    [tableName]
   )
 
-  if (!rows.length) {
-    await execute(`ALTER TABLE messages ADD COLUMN sequence INT NULL AFTER usage_json`)
-  }
+  return new Set(rows.map((row) => String(row.COLUMN_NAME)))
 }
 
-export async function createConversation(input: { id: string; title: string; model: string }) {
+export async function createConversation(input: { id: string; title: string; model: string; status?: string }) {
   await ensureChatTables()
   await execute(
     `INSERT INTO conversations (id, title, model, status)
-     VALUES (?, ?, ?, 'active')`,
-    [input.id, input.title, input.model]
+     VALUES (?, ?, ?, ?)`,
+    [input.id, input.title, input.model, input.status ?? 'active']
   )
 }
 
 export async function findConversation(id: string) {
   await ensureChatTables()
   const rows = await query<ConversationRow[]>(
-    `SELECT id, title, model, status, created_at, updated_at
+    `SELECT id, title, model, status, last_message, last_message_at, total_tokens, created_at, updated_at
      FROM conversations
      WHERE id = ?
      LIMIT 1`,
@@ -108,22 +141,87 @@ export async function touchConversation(id: string, input: { title?: string; mod
   )
 }
 
+export async function updateConversationAfterMessage(
+  id: string,
+  input: { lastMessage: string; model?: string | null; usage?: unknown }
+) {
+  await ensureChatTables()
+  await execute(
+    `UPDATE conversations
+     SET model = COALESCE(?, model),
+         last_message = ?,
+         last_message_at = NOW(),
+         total_tokens = COALESCE(total_tokens, 0) + ?,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [input.model ?? null, input.lastMessage.slice(0, 1000), readUsageTokens(input.usage), id]
+  )
+}
+
 export async function createMessage(input: {
   conversationId: string
   role: 'system' | 'user' | 'assistant'
   content: string
+  metadata?: unknown
   model?: string | null
   usage?: unknown
   sequence?: number | null
 }) {
   await ensureChatTables()
   const result = await execute<ResultSetHeader>(
-    `INSERT INTO messages (conversation_id, role, content, model, usage_json, sequence)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [input.conversationId, input.role, input.content, input.model ?? null, stringifyJson(input.usage ?? null), input.sequence ?? null]
+    `INSERT INTO messages (conversation_id, role, content, metadata_json, model, usage_json, sequence)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      input.conversationId,
+      input.role,
+      input.content,
+      stringifyJson(input.metadata ?? null),
+      input.model ?? null,
+      stringifyJson(input.usage ?? null),
+      input.sequence ?? null
+    ]
   )
 
   return result.insertId
+}
+
+export async function listConversations() {
+  await ensureChatTables()
+  const rows = await query<(ConversationRow & { message_count: number })[]>(
+    `SELECT
+       c.id,
+       c.title,
+       c.model,
+       c.status,
+       c.last_message,
+       c.last_message_at,
+       c.total_tokens,
+       c.created_at,
+       c.updated_at,
+       COUNT(m.id) AS message_count
+     FROM conversations c
+     LEFT JOIN messages m ON m.conversation_id = c.id
+     GROUP BY c.id, c.title, c.model, c.status, c.last_message, c.last_message_at, c.total_tokens, c.created_at, c.updated_at
+     ORDER BY c.updated_at DESC, c.created_at DESC`
+  )
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    model: row.model,
+    status: row.status,
+    lastMessage: row.last_message ?? '',
+    lastMessageAt: row.last_message_at ?? undefined,
+    totalTokens: Number(row.total_tokens ?? 0),
+    updatedAt: row.updated_at,
+    createdAt: row.created_at,
+    messageCount: Number(row.message_count ?? 0)
+  }))
+}
+
+export async function deleteConversation(id: string) {
+  await ensureChatTables()
+  return execute<ResultSetHeader>('DELETE FROM conversations WHERE id = ?', [id])
 }
 
 export async function countMessagesByConversation(conversationId: string) {
@@ -141,7 +239,7 @@ export async function countMessagesByConversation(conversationId: string) {
 export async function listRecentMessages(conversationId: string, limit = 10) {
   await ensureChatTables()
   const rows = await query<MessageRow[]>(
-    `SELECT id, conversation_id, role, content, model, usage_json, sequence, created_at
+    `SELECT id, conversation_id, role, content, metadata_json, model, usage_json, sequence, created_at
      FROM messages
      WHERE conversation_id = ?
      ORDER BY created_at DESC, id DESC
@@ -154,6 +252,7 @@ export async function listRecentMessages(conversationId: string, limit = 10) {
     conversationId: row.conversation_id,
     role: row.role,
     content: row.content,
+    metadata: parseJson(row.metadata_json, null),
     model: row.model ?? undefined,
     usage: parseJson(row.usage_json, null),
     sequence: row.sequence ?? undefined,
@@ -164,7 +263,7 @@ export async function listRecentMessages(conversationId: string, limit = 10) {
 export async function listMessagesByConversation(conversationId: string) {
   await ensureChatTables()
   const rows = await query<MessageRow[]>(
-    `SELECT id, conversation_id, role, content, model, usage_json, sequence, created_at
+    `SELECT id, conversation_id, role, content, metadata_json, model, usage_json, sequence, created_at
      FROM messages
      WHERE conversation_id = ?
      ORDER BY created_at ASC, id ASC`,
@@ -176,9 +275,16 @@ export async function listMessagesByConversation(conversationId: string) {
     conversationId: row.conversation_id,
     role: row.role,
     content: row.content,
+    metadata: parseJson(row.metadata_json, null),
     model: row.model ?? undefined,
     usage: parseJson(row.usage_json, null),
     sequence: row.sequence ?? undefined,
     createdAt: row.created_at
   }))
+}
+
+function readUsageTokens(usage: unknown) {
+  if (!usage || typeof usage !== 'object') return 0
+  const record = usage as Record<string, unknown>
+  return Number(record.total_tokens ?? record.totalTokens ?? 0) || 0
 }

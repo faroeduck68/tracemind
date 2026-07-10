@@ -24,6 +24,7 @@ export const env = {
   useRealLlm: readBoolean('USE_REAL_LLM', true),
   useRealFileParse: readBoolean('USE_REAL_FILE_PARSE', true),
   useRealDocxExport: readBoolean('USE_REAL_DOCX_EXPORT', false),
+  secretEncryptionKey: process.env.SECRET_ENCRYPTION_KEY ?? process.env.TOOL_SECRET_KEY ?? '',
   openai: {
     apiKey: process.env.OPENAI_API_KEY ?? '',
     baseURL: process.env.OPENAI_BASE_URL ?? 'https://api.deepseek.com',

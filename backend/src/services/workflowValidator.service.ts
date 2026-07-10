@@ -1,3 +1,4 @@
+import { listTools } from '../models/tool.model'
 import { toolRegistry } from '../tools'
 import { WorkflowEdge, WorkflowNode } from '../types/workflow'
 
@@ -7,10 +8,15 @@ export type ValidateResult = {
   warnings: string[]
 }
 
+export type ValidateWorkflowOptions = {
+  allowedToolNames?: Set<string>
+}
+
 // 任务书 §11：在运行 Workflow 前进行结构与工具校验，返回 {valid, errors, warnings}。
-export function validateWorkflow(nodes: WorkflowNode[], edges: WorkflowEdge[]): ValidateResult {
+export function validateWorkflow(nodes: WorkflowNode[], edges: WorkflowEdge[], options: ValidateWorkflowOptions = {}): ValidateResult {
   const errors: string[] = []
   const warnings: string[] = []
+  const allowedToolNames = options.allowedToolNames ?? new Set(Object.keys(toolRegistry))
 
   // 1. nodes 不为空
   if (nodes.length === 0) errors.push('工作流节点不能为空')
@@ -32,11 +38,11 @@ export function validateWorkflow(nodes: WorkflowNode[], edges: WorkflowEdge[]): 
     if (!nodeIds.has(edge.target)) errors.push(`连线 ${edge.id} 的目标节点不存在：${edge.target}`)
   }
 
-  // 6. node.tool 必须存在于 toolRegistry
+  // 6. node.tool 必须存在于内置 Registry 或数据库配置工具中
   for (const node of nodes) {
     if (!node.tool) {
       errors.push(`节点 ${node.id} 未绑定工具`)
-    } else if (!(node.tool in toolRegistry)) {
+    } else if (!allowedToolNames.has(node.tool)) {
       errors.push(`节点 ${node.id} 绑定的工具未注册：${node.tool}`)
     }
   }
@@ -67,6 +73,17 @@ export function validateWorkflow(nodes: WorkflowNode[], edges: WorkflowEdge[]): 
   }
 
   return { valid: errors.length === 0, errors, warnings }
+}
+
+export async function getAllowedWorkflowToolNames() {
+  const names = new Set(Object.keys(toolRegistry))
+  try {
+    const rows = await listTools()
+    rows.filter((tool) => tool.enabled === 1).forEach((tool) => names.add(tool.name))
+  } catch {
+    // 数据库不可用时仍保留内置 Registry 校验能力。
+  }
+  return names
 }
 
 function hasCycle(nodes: WorkflowNode[], edges: WorkflowEdge[]): boolean {

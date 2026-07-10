@@ -1,6 +1,17 @@
 import { Request, Response } from 'express'
-import { addTool, editTool, getTool, getTools, getToolsStats, switchTool } from '../services/tool.service'
+import {
+  addTool,
+  checkToolName,
+  editTool,
+  getTool,
+  getTools,
+  getToolsStats,
+  switchTool,
+  testDraftTool,
+  testTool
+} from '../services/tool.service'
 import { sendSuccess } from '../utils/response'
+import { getRequestUserId } from '../utils/requestUser'
 
 export async function listToolController(_req: Request, res: Response) {
   return sendSuccess(res, await getTools())
@@ -16,8 +27,19 @@ export async function getToolController(req: Request, res: Response) {
 }
 
 export async function createToolController(req: Request, res: Response) {
-  const id = await addTool(req.body)
-  return sendSuccess(res, { id }, 'Tool created', 201)
+  try {
+    const id = await addTool(req.body)
+    return sendSuccess(res, { id }, 'Tool created', 201)
+  } catch (error) {
+    if (isDuplicateToolNameError(error)) {
+      return res.status(409).json({
+        code: 409,
+        message: '工具名已存在',
+        field: 'name'
+      })
+    }
+    throw error
+  }
 }
 
 export async function updateToolController(req: Request, res: Response) {
@@ -30,4 +52,23 @@ export async function toggleToolController(req: Request, res: Response) {
 
 export async function toolStatsController(_req: Request, res: Response) {
   return sendSuccess(res, await getToolsStats())
+}
+
+export async function checkToolNameController(req: Request, res: Response) {
+  return sendSuccess(res, await checkToolName(String(req.query.name ?? '')))
+}
+
+export async function testToolController(req: Request, res: Response) {
+  const result = await testTool(String(req.params.id), req.body?.input ?? {}, getRequestUserId(req))
+  return sendSuccess(res, result, result.success ? 'Tool tested' : 'Tool test failed', result.success ? 200 : 400)
+}
+
+export async function testDraftToolController(req: Request, res: Response) {
+  const result = await testDraftTool({ ...(req.body ?? {}), userId: getRequestUserId(req) })
+  return sendSuccess(res, result, result.success ? 'Draft tool tested' : 'Draft tool test failed')
+}
+
+function isDuplicateToolNameError(error: unknown) {
+  const record = error as { code?: string; errno?: number; message?: string }
+  return record?.code === 'ER_DUP_ENTRY' || record?.errno === 1062 || String(record?.message ?? '').includes('Duplicate entry')
 }

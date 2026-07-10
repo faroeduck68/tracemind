@@ -1,8 +1,9 @@
-import { findWorkflowRunById } from '../models/workflowRun.model'
+import { findWorkflowRunById, listRecentWorkflowRuns } from '../models/workflowRun.model'
 import { listTraceStepsByRunId, TraceStepRow } from '../models/traceStep.model'
 import { parseJson } from '../utils/json'
 import { summarize } from '../utils/summarize'
 import { formatClock, formatLatency } from '../utils/time'
+import { getWorkflow } from './workflow.service'
 
 export async function getTraceForRun(runId: number) {
   const rows = await listTraceStepsByRunId(runId)
@@ -31,9 +32,14 @@ export async function getRunDetail(runId: number) {
   return {
     id: run.id,
     workflowId: run.workflow_id,
+    workflowName: run.workflow_name,
+    conversationId: run.conversation_id,
     status: run.status,
     inputData: parseJson(run.input_data, null),
     outputData: parseJson(run.output_data, null),
+    fileIds: parseJson(run.file_ids, []),
+    files: readFilesFromInput(run.input_data),
+    summary: run.summary ?? '',
     totalLatencyMs: run.total_latency_ms,
     totalTokens: run.total_tokens,
     errorMessage: run.error_message,
@@ -44,6 +50,40 @@ export async function getRunDetail(runId: number) {
   }
 }
 
+export async function getRunHistory(limit = 50) {
+  const rows = await listRecentWorkflowRuns(limit)
+  return rows.map((run) => ({
+    id: run.id,
+    workflowId: run.workflow_id,
+    workflowName: run.workflow_name,
+    conversationId: run.conversation_id,
+    status: run.status,
+    inputData: parseJson(run.input_data, null),
+    outputData: parseJson(run.output_data, null),
+    fileIds: parseJson(run.file_ids, []),
+    files: readFilesFromInput(run.input_data),
+    summary: run.summary ?? '',
+    errorMessage: run.error_message,
+    totalLatencyMs: run.total_latency_ms,
+    totalTokens: run.total_tokens,
+    failureAnalysis: parseJson(run.failure_analysis, null),
+    startedAt: run.started_at,
+    finishedAt: run.finished_at
+  }))
+}
+
+export async function getRunReplay(runId: number) {
+  const run = await getRunDetail(runId)
+  if (!run) return null
+
+  const workflow = await getWorkflow(run.workflowId)
+  return {
+    workflow,
+    run,
+    traceSteps: run.trace
+  }
+}
+
 function toTraceStep(row: TraceStepRow) {
   const inputData = parseJson(row.input_data, null)
   const outputData = parseJson(row.output_data, null)
@@ -51,6 +91,8 @@ function toTraceStep(row: TraceStepRow) {
   return {
     id: `t${row.id}`,
     runId: row.run_id,
+    workflowId: row.workflow_id,
+    stepOrder: Number(row.step_order ?? 0),
     stepName: row.step_name,
     nodeId: row.node_key ?? undefined,
     time: formatClock(row.started_at),
@@ -61,10 +103,16 @@ function toTraceStep(row: TraceStepRow) {
     latencyMs: row.latency_ms ?? undefined,
     inputData,
     outputData,
-    inputSummary: summarize(inputData),
-    outputSummary: summarize(outputData),
+    inputSummary: row.input_summary ?? summarize(inputData),
+    outputSummary: row.output_summary ?? summarize(outputData),
     errorMessage: row.error_message ?? undefined,
     permissionBehavior: undefined,
-    permissionReason: undefined
+    permissionReason: undefined,
+    approvalId: undefined
   }
+}
+
+function readFilesFromInput(inputData: unknown) {
+  const input = parseJson<Record<string, unknown>>(inputData, {})
+  return Array.isArray(input.files) ? input.files : []
 }
