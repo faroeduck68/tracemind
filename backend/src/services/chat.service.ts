@@ -9,8 +9,13 @@ import {
 } from '../models/chat.model'
 import { listTools } from '../models/tool.model'
 import { makeKey } from '../utils/uuid'
+import { extractWeatherCity } from './context.service'
 import { chat, LlmMessage } from './llm.service'
 import { getRunDetail } from './trace.service'
+import { runTool } from './toolRunner.service'
+import { hasExplicitWebSearchIntent, isWeatherQuery, needsRealtimeInformation } from './realtimeIntent.service'
+import { generateAndSaveWorkflow } from './workflow.service'
+import { runWorkflow } from './workflowExecutor.service'
 
 export async function sendChatMessage(input: {
   conversationId?: string
@@ -50,6 +55,7 @@ export async function sendChatMessage(input: {
     metadata: {
       messageType: 'user',
       files: input.files ?? [],
+      fileIds: input.fileIds ?? [],
       workflowId: input.workflowId ?? null,
       runId: input.runId ?? null
     },
@@ -63,9 +69,94 @@ export async function sendChatMessage(input: {
     explicitFiles: input.files,
     history
   })
+  const explicitFiles = Array.isArray(input.files) ? input.files : []
+  const attachedFiles =
+    explicitFiles.length > 0
+      ? explicitFiles
+      : shouldUseRecentDocumentContext(message)
+        ? recentWorkflowContext.files
+        : []
+  const hasUploadedFiles = attachedFiles.length > 0 || Boolean(input.fileIds?.length)
+  const explicitWebSearch = hasExplicitWebSearchIntent(message)
 
-  if (isWeatherQuery(message) && !(await hasWeatherTool())) {
-    const content = '当前系统没有天气查询工具，无法实时查询天气。可以为系统新增 weather_query_tool 后支持该能力。'
+  const weatherToolName = !hasUploadedFiles && isWeatherQuery(message) ? await findWeatherToolName() : ''
+  const webSearchToolName =
+    explicitWebSearch || (!hasUploadedFiles && needsRealtimeInformation(message)) ? await findWebSearchToolName() : ''
+
+  if (hasUploadedFiles) {
+    const workflow = await generateAndSaveWorkflow(message, attachedFiles, {
+      conversationId,
+      fileIds: input.fileIds
+    })
+    const run = await runWorkflow(workflow.id, {
+      query: message,
+      files: attachedFiles,
+      fileIds: input.fileIds ?? [],
+      conversationId,
+      userId: 'default_user'
+    })
+    const runOutput = readRecord(run.output)
+    const warnings = Array.isArray(runOutput?.warnings) ? runOutput.warnings.map(String) : []
+    const skippedWebSearch = warnings.some((warning) => warning.includes('已跳过外部资料检索'))
+    const baseContent =
+      run.status === 'success'
+        ? firstString(runOutput?.summary, runOutput?.markdown, '已完成上传文件分析。')
+        : run.errorMessage ?? '文件分析工作流执行失败。'
+    const content = skippedWebSearch
+      ? `已跳过外部联网搜索，正在基于上传文件继续分析。\n\n${baseContent}`
+      : baseContent
+    const metadata = {
+      messageType: run.status === 'success' ? 'file_analysis_result' : 'file_analysis_error',
+      workflowId: workflow.id,
+      runId: run.runId,
+      files: attachedFiles,
+      fileIds: input.fileIds ?? [],
+      warnings,
+      sources: Array.isArray(runOutput?.sources) ? runOutput.sources : []
+    }
+    const assistantMessageId = await createMessage({
+      conversationId,
+      role: 'assistant',
+      content,
+      metadata,
+      model: env.openai.model,
+      sequence: assistantSequence
+    })
+
+    await updateConversationAfterMessage(conversationId, { lastMessage: content, model: env.openai.model })
+
+    return {
+      conversationId,
+      userMessage: {
+        id: userMessageId,
+        role: 'user',
+        content: message,
+        metadata: {
+          messageType: 'user',
+          files: attachedFiles,
+          fileIds: input.fileIds ?? [],
+          workflowId: input.workflowId ?? null,
+          runId: input.runId ?? null
+        },
+        sequence: userSequence,
+        createdAt: new Date().toISOString()
+      },
+      assistantMessage: {
+        id: assistantMessageId,
+        role: 'assistant',
+        content,
+        metadata,
+        model: env.openai.model,
+        sequence: assistantSequence,
+        createdAt: new Date().toISOString()
+      },
+      workflowId: workflow.id,
+      runId: run.runId
+    }
+  }
+
+  if (isWeatherQuery(message) && !weatherToolName && !webSearchToolName) {
+    const content = '当前系统没有联网查询能力：weather_query_tool 和 web_search_tool 均不可用。'
     const assistantMessageId = await createMessage({
       conversationId,
       role: 'assistant',
@@ -97,6 +188,154 @@ export async function sendChatMessage(input: {
         role: 'assistant',
         content,
         metadata: { messageType: 'weather_missing_tool', missingTools: ['weather_query_tool'] },
+        model: env.openai.model,
+        sequence: assistantSequence,
+        createdAt: new Date().toISOString()
+      },
+      workflowId: null,
+      runId: null
+    }
+  }
+
+  if (isWeatherQuery(message) && weatherToolName) {
+    const city = extractWeatherCity(message)
+    const result = await runTool(
+      weatherToolName,
+      { city },
+      { userId: 'default_user', query: message, nodeOutputs: {}, nodeInputs: {}, traces: [] },
+      { checkPermission: false, manageToolCallLog: false, manageToolStats: true }
+    )
+    const content = buildWeatherReply(city, result)
+    const assistantMessageId = await createMessage({
+      conversationId,
+      role: 'assistant',
+      content,
+      metadata: { messageType: result.success ? 'weather_result' : 'weather_error', toolName: weatherToolName, city },
+      model: env.openai.model,
+      sequence: assistantSequence
+    })
+
+    await updateConversationAfterMessage(conversationId, { lastMessage: content, model: env.openai.model })
+
+    return {
+      conversationId,
+      userMessage: {
+        id: userMessageId,
+        role: 'user',
+        content: message,
+        metadata: {
+          messageType: 'user',
+          files: input.files ?? [],
+          workflowId: input.workflowId ?? null,
+          runId: input.runId ?? null
+        },
+        sequence: userSequence,
+        createdAt: new Date().toISOString()
+      },
+      assistantMessage: {
+        id: assistantMessageId,
+        role: 'assistant',
+        content,
+        metadata: { messageType: result.success ? 'weather_result' : 'weather_error', toolName: weatherToolName, city },
+        model: env.openai.model,
+        sequence: assistantSequence,
+        createdAt: new Date().toISOString()
+      },
+      workflowId: null,
+      runId: null
+    }
+  }
+
+  if (needsRealtimeInformation(message) && webSearchToolName) {
+    const workflow = await generateAndSaveWorkflow(message, input.files ?? [], { conversationId })
+    const run = await runWorkflow(workflow.id, {
+      query: message,
+      files: input.files ?? [],
+      conversationId,
+      userId: 'default_user'
+    })
+    const runOutput = readRecord(run.output)
+    const content =
+      run.status === 'success'
+        ? firstString(runOutput?.summary, runOutput?.markdown)
+        : friendlyWebSearchError(run.errorMessage ?? '网页搜索失败。')
+    const model = env.openai.model
+
+    const metadata = {
+      messageType: run.status === 'success' ? 'web_search_result' : 'web_search_error',
+      toolName: webSearchToolName,
+      query: message,
+      sources: Array.isArray(runOutput?.sources) ? runOutput.sources : [],
+      workflowId: workflow.id,
+      runId: run.runId
+    }
+    const assistantMessageId = await createMessage({
+      conversationId,
+      role: 'assistant',
+      content,
+      metadata,
+      model,
+      sequence: assistantSequence
+    })
+
+    await updateConversationAfterMessage(conversationId, { lastMessage: content, model })
+
+    return {
+      conversationId,
+      userMessage: {
+        id: userMessageId,
+        role: 'user',
+        content: message,
+        metadata: {
+          messageType: 'user',
+          files: input.files ?? [],
+          workflowId: input.workflowId ?? null,
+          runId: input.runId ?? null
+        },
+        sequence: userSequence,
+        createdAt: new Date().toISOString()
+      },
+      assistantMessage: {
+        id: assistantMessageId,
+        role: 'assistant',
+        content,
+        metadata,
+        model,
+        sequence: assistantSequence,
+        createdAt: new Date().toISOString()
+      },
+      workflowId: workflow.id,
+      runId: run.runId
+    }
+  }
+
+  if (needsRealtimeInformation(message)) {
+    const content = '当前系统没有联网查询能力：web_search_tool 不可用。'
+    const metadata = { messageType: 'web_search_missing_tool', missingTools: ['web_search_tool'] }
+    const assistantMessageId = await createMessage({
+      conversationId,
+      role: 'assistant',
+      content,
+      metadata,
+      model: env.openai.model,
+      sequence: assistantSequence
+    })
+    await updateConversationAfterMessage(conversationId, { lastMessage: content, model: env.openai.model })
+    return {
+      conversationId,
+      userMessage: {
+        id: userMessageId,
+        role: 'user',
+        content: message,
+        metadata: { messageType: 'user' },
+        sequence: userSequence,
+        createdAt: new Date().toISOString()
+      },
+      assistantMessage: {
+        id: assistantMessageId,
+        role: 'assistant',
+        content,
+        metadata,
         model: env.openai.model,
         sequence: assistantSequence,
         createdAt: new Date().toISOString()
@@ -181,22 +420,74 @@ export async function sendChatMessage(input: {
   }
 }
 
+function friendlyWebSearchError(message: string) {
+  if (message.includes('未配置搜索服务 Key')) {
+    return 'web_search_tool 未配置搜索服务 Key，请在后端 .env 中配置 Tavily/Brave/SerpAPI/Bing 任一搜索服务 Key。'
+  }
+  return message
+}
+
 function createConversationTitle(message: string) {
   return message.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation'
 }
 
-function isWeatherQuery(message: string) {
-  const normalized = message.toLowerCase()
-  return ['天气', '气温', 'weather', 'temperature', 'forecast'].some((keyword) => normalized.includes(keyword))
-}
-
-async function hasWeatherTool() {
+async function findWeatherToolName() {
   const tools = await listTools()
-  return tools.some((tool) => {
+  const weatherTools = tools.filter((tool) => {
     if (tool.enabled !== 1) return false
     const text = `${tool.name} ${tool.display_name} ${tool.description ?? ''}`.toLowerCase()
-    return ['weather', 'forecast', 'temperature', '天气', '气温'].some((keyword) => text.includes(keyword.toLowerCase()))
+    return ['weather', 'forecast', 'temperature', '\u5929\u6c14', '\u6c14\u6e29', '\u9884\u62a5'].some((keyword) =>
+      text.includes(keyword.toLowerCase())
+    )
   })
+  return weatherTools.find((tool) => tool.name === 'weather_query_tool')?.name ?? weatherTools[0]?.name ?? ''
+}
+
+async function findWebSearchToolName() {
+  const tools = await listTools()
+  return tools.find((tool) => tool.enabled === 1 && tool.name === 'web_search_tool')?.name ?? ''
+}
+
+function buildWeatherReply(city: string, result: Awaited<ReturnType<typeof runTool>>) {
+  if (!result.success) {
+    return `天气查询失败：${result.errorMessage ?? result.message ?? '未知错误'}`
+  }
+
+  const output = readRecord(result.output)
+  const status = firstString(output?.status)
+  const info = firstString(output?.info)
+  if (status === '0') return `天气查询失败：${info || '天气服务没有返回有效数据'}`
+
+  const cityName = firstString(output?.city, city)
+  const weather = firstString(output?.weather)
+  const temperature = formatWeatherValue(output?.temperature, '°C')
+  const humidity = formatWeatherValue(output?.humidity, '%')
+  const wind = [firstString(output?.winddirection), firstString(output?.windpower)].filter(Boolean).join(' ')
+  const reporttime = firstString(output?.reporttime)
+  const parts = [
+    `${cityName || city}当前天气`,
+    weather,
+    temperature && `温度 ${temperature}`,
+    humidity && `湿度 ${humidity}`,
+    wind && `风况 ${wind}`,
+    reporttime && `更新时间 ${reporttime}`
+  ].filter(Boolean)
+
+  return parts.length > 1 ? parts.join('，') : `天气查询完成，但未返回 ${city || '目标城市'} 的天气明细。`
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  }
+  return ''
+}
+
+function formatWeatherValue(value: unknown, unit: string) {
+  const text = firstString(value)
+  if (!text) return ''
+  return text.endsWith(unit) ? text : `${text}${unit}`
 }
 
 function shouldUseRecentDocumentContext(message: string) {

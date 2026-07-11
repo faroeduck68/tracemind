@@ -8,7 +8,8 @@ VALUES
 ('pdf_parse_tool', 'PDF 解析工具', 'builtin', 'v1.2.0', '数据处理', '解析 PDF 文件内容，提取文本和结构化信息', 1, 'low', 96.2, 1230, 2341),
 ('financial_extract_tool', '财务指标提取工具', 'builtin', 'v1.1.0', '数据分析', '从财报文本中提取收入、利润、负债率、现金流等指标', 1, 'low', 92.5, 1870, 1892),
 ('risk_summary_tool', '风险总结工具', 'builtin', 'v1.0.3', '数据分析', '基于财务指标生成风险分析与总结', 1, 'low', 91.3, 2340, 1256),
-('finance_knowledge_base', '财务知识检索工具', 'builtin', 'v1.0.0', '检索搜索', '从财务知识库中检索相关资料', 1, 'low', 90.2, 980, 4532),
+('knowledge_search_tool', '知识检索工具', 'builtin', 'v1.1.0', '检索搜索', '从本地知识库 knowledge_chunks 中检索相关片段', 1, 'low', 90.2, 980, 4532),
+('finance_knowledge_base', '财务知识检索工具（兼容别名）', 'builtin', 'v1.0.1', '检索搜索', '兼容旧工作流，实际调用本地知识库检索工具', 1, 'low', 90.2, 980, 4532),
 ('summary_llm', '总结大模型工具', 'builtin', 'v1.0.0', '内容生成', '调用大模型生成总结内容', 1, 'low', 95.0, 1050, 3214),
 ('report_output', '报告输出工具', 'builtin', 'v1.0.0', '输出', '生成结构化报告并输出结果', 1, 'low', 97.0, 760, 2105),
 ('financial_risk_tool', '财务风险分析工具', 'builtin', 'v1.0.0', '数据分析', '基于财务指标输出结构化风险判断与建议', 1, 'low', 91.0, 1600, 0),
@@ -69,7 +70,7 @@ VALUES
       'info', 'info'
     )
   ),
-  JSON_OBJECT('type', 'apiKey', 'keyName', 'key', 'in', 'query', 'value', 'userSecret:AMAP_API_KEY', 'fallback', true)
+  JSON_OBJECT('type', 'apiKey', 'keyName', 'key', 'in', 'query', 'value', 'userSecret:weather', 'fallback', true)
 )
 ON DUPLICATE KEY UPDATE
 display_name = VALUES(display_name),
@@ -80,6 +81,29 @@ input_schema = VALUES(input_schema),
 output_schema = VALUES(output_schema),
 config_json = VALUES(config_json),
 auth_config = VALUES(auth_config);
+
+INSERT INTO tools
+(name, display_name, `type`, version, category, description, enabled, risk_level, input_schema, output_schema)
+VALUES
+(
+  'web_search_tool',
+  '网页搜索工具',
+  'builtin',
+  'v1.0.0',
+  '检索搜索',
+  '根据用户问题搜索互联网实时信息，并返回摘要与来源。',
+  1,
+  'low',
+  JSON_OBJECT('query', JSON_OBJECT('type', 'string', 'required', true)),
+  JSON_OBJECT('results', 'array', 'summary', 'string', 'sources', 'array')
+)
+ON DUPLICATE KEY UPDATE
+display_name = VALUES(display_name),
+`type` = VALUES(`type`),
+category = VALUES(category),
+description = VALUES(description),
+input_schema = VALUES(input_schema),
+output_schema = VALUES(output_schema);
 
 INSERT INTO memories
 (memory_type, title, content, importance, importance_score, source_type, enabled)
@@ -101,9 +125,9 @@ VALUES
 );
 
 INSERT INTO knowledge_bases
-(name, description, embedding_model, retrieval_mode, top_k, document_count, chunk_count, status)
+(name, description, embedding_model, retrieval_mode, top_k, document_count, chunk_count, status, owner_user_id)
 VALUES
-('财务风险知识库', '第一版 mock 知识库，用于财报风险分析场景。', 'mock-embedding-v1', 'hybrid', 5, 0, 0, 'normal');
+('财务风险知识库', '本地财务风险知识库，用于财报风险分析场景。', 'local-keyword-v1', 'keyword', 5, 0, 0, 'normal', 'default_user');
 
 INSERT INTO user_settings
 (id, language, default_model, theme, auto_save, auto_save_interval, settings_json)

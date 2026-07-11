@@ -85,7 +85,7 @@ export async function finishTraceStep(
       status,
       errorMessage ?? null,
       stringifyJson(redactSecrets(outputData)),
-      summarize(redactSecrets(outputData), 240) ?? null,
+      summarizeTraceOutput(redactSecrets(outputData)),
       latencyMs,
       traceStepId
     ]
@@ -106,7 +106,7 @@ export async function finishTraceStepFailed(
     [
       errorMessage,
       stringifyJson(redactSecrets(outputData)),
-      summarize(redactSecrets(outputData), 240) ?? errorMessage,
+      summarizeTraceOutput(redactSecrets(outputData)) ?? errorMessage,
       latencyMs,
       traceStepId
     ]
@@ -133,4 +133,24 @@ async function nextStepOrder(runId: number) {
   )
 
   return Number(rows[0]?.next_order ?? 1)
+}
+
+function summarizeTraceOutput(outputData: unknown) {
+  const knowledgeSummary = summarizeKnowledgeSearchOutput(outputData)
+  return knowledgeSummary ?? summarize(outputData, 240) ?? null
+}
+
+function summarizeKnowledgeSearchOutput(outputData: unknown) {
+  if (!outputData || typeof outputData !== 'object' || Array.isArray(outputData)) return null
+  const record = outputData as Record<string, unknown>
+  if (record.skipped === true && typeof record.warning === 'string' && record.warning.trim()) {
+    return record.warning.trim()
+  }
+  if (!Array.isArray(record.results)) return null
+  const count = Number(record.resultCount ?? record.results.length)
+  if (!Number.isFinite(count)) return null
+  if (Array.isArray(record.sources)) {
+    return `网页搜索返回 ${count} 条结果、${record.sources.length} 个来源。`
+  }
+  return `从本地知识库检索到 ${count} 条相关片段。`
 }

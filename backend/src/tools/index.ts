@@ -11,6 +11,7 @@ import reportOutputFinalTool from './reportOutputFinal.tool'
 import riskSummaryTool from './riskSummary.tool'
 import summaryLLMTool from './summaryLLM.tool'
 import userInputTool from './userInput.tool'
+import webSearchTool from './webSearch.tool'
 
 export const toolRegistry = {
   user_input: userInputTool,
@@ -23,8 +24,10 @@ export const toolRegistry = {
   markdown_to_docx_tool: markdownToDocxTool,
   report_output_tool: reportOutputFinalTool,
   risk_summary_tool: riskSummaryTool,
+  knowledge_search_tool: knowledgeSearchTool,
   finance_knowledge_base: knowledgeSearchTool,
   summary_llm: summaryLLMTool,
+  web_search_tool: webSearchTool,
   report_output: reportOutputTool
 }
 

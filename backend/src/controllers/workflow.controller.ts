@@ -20,8 +20,10 @@ export async function generateWorkflowController(req: Request, res: Response) {
   }
 
   const files = Array.isArray(req.body?.files) ? req.body.files : []
+  const fileIds = Array.isArray(req.body?.fileIds) ? req.body.fileIds : []
+  const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : []
   const conversationId = typeof req.body?.conversationId === 'string' && req.body.conversationId.trim() ? req.body.conversationId.trim() : null
-  const workflow = await generateAndSaveWorkflow(query, files, { conversationId })
+  const workflow = await generateAndSaveWorkflow(query, files, { conversationId, fileIds, attachments })
   return sendSuccess(res, workflow, 'Workflow generated')
 }
 

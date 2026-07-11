@@ -1,9 +1,0 @@
-<component name="libraryTable">
-  <library name="tracemind-ui">
-    <CLASSES>
-      <root url="jar://$PROJECT_DIR$/tracemind-ui.zip!/" />
-    </CLASSES>
-    <JAVADOC />
-    <SOURCES />
-  </library>
-</component>

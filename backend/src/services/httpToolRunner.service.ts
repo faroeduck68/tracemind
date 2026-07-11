@@ -41,7 +41,7 @@ export async function runHttpTool(tool: ToolRow, input: unknown, context: unknow
   }
 
   const auth = parseJson<AuthConfig>(tool.auth_config, {})
-  await injectAuth(url, headers, auth, context)
+  const sensitiveQueryKeys = await injectAuth(url, headers, auth, context)
 
   const bodySource = Object.keys(mappedInput.body).length ? mappedInput.body : config.bodyTemplate
   const body = method === 'GET' || method === 'HEAD' ? undefined : renderValue(bodySource ?? {}, input, context)
@@ -67,7 +67,7 @@ export async function runHttpTool(tool: ToolRow, input: unknown, context: unknow
     errorMessage: response.ok ? undefined : `HTTP ${response.status}: ${text.slice(0, 300)}`,
     trace: {
       method,
-      endpoint: maskUrl(url),
+      endpoint: maskUrl(url, sensitiveQueryKeys),
       status: response.status,
       latencyMs: Date.now() - startedAt
     }
@@ -135,7 +135,7 @@ function isAmapWeatherTool(tool: ToolRow, config: HttpToolConfig) {
 }
 
 async function injectAuth(url: URL, headers: Record<string, unknown>, auth: AuthConfig, context: unknown) {
-  if (!auth?.type || auth.type === 'none') return
+  if (!auth?.type || auth.type === 'none') return []
   if (auth.type !== 'apiKey') throw new Error(`Unsupported auth_config.type: ${auth.type}`)
   if (!auth.keyName) throw new Error('apiKey auth requires keyName.')
 
@@ -145,8 +145,13 @@ async function injectAuth(url: URL, headers: Record<string, unknown>, auth: Auth
     throw new Error(`缺少 ${secretName}，请配置平台 Key 或用户自己的 Key。`)
   }
 
-  if (auth.in === 'header') headers[auth.keyName] = value
-  else url.searchParams.set(auth.keyName, value)
+  if (auth.in === 'header') {
+    headers[auth.keyName] = value
+    return []
+  }
+
+  url.searchParams.set(auth.keyName, value)
+  return [auth.keyName]
 }
 
 async function resolveSecret(auth: AuthConfig, context: unknown) {
@@ -273,10 +278,11 @@ function isBlockedIp(value: string) {
   return false
 }
 
-function maskUrl(url: URL) {
+function maskUrl(url: URL, extraSensitiveKeys: string[] = []) {
   const cloned = new URL(url.toString())
+  const sensitiveKeys = new Set(extraSensitiveKeys.map((key) => key.toLowerCase()))
   for (const key of cloned.searchParams.keys()) {
-    if (/key|token|secret|password/i.test(key)) cloned.searchParams.set(key, '***')
+    if (sensitiveKeys.has(key.toLowerCase()) || /key|token|secret|password/i.test(key)) cloned.searchParams.set(key, '***')
   }
   return cloned.toString()
 }

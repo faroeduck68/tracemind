@@ -66,11 +66,16 @@ GET  /api/runs/:runId
 GET  /api/runs/:runId/trace
 
 GET  /api/tools
+POST /api/tools/web-search/test
 GET  /api/memories
 GET  /api/templates
 GET  /api/knowledge-bases
 GET  /api/settings
 ```
+
+网页搜索工具的真实 Key 配置、npm 验收和 curl 验收见：
+
+[`docs/web-search-real-api-test.md`](docs/web-search-real-api-test.md)
 
 ## 工作流模板
 

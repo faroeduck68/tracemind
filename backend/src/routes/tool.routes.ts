@@ -6,6 +6,7 @@ import {
   listToolController,
   testDraftToolController,
   testToolController,
+  testWebSearchController,
   toggleToolController,
   toolStatsController,
   updateToolController
@@ -18,6 +19,7 @@ toolRouter.get('/', asyncHandler(listToolController))
 toolRouter.get('/stats', asyncHandler(toolStatsController))
 toolRouter.get('/check-name', asyncHandler(checkToolNameController))
 toolRouter.post('/test-draft', asyncHandler(testDraftToolController))
+toolRouter.post('/web-search/test', asyncHandler(testWebSearchController))
 toolRouter.get('/:id', asyncHandler(getToolController))
 toolRouter.post('/', asyncHandler(createToolController))
 toolRouter.post('/:id/test', asyncHandler(testToolController))

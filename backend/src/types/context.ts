@@ -13,6 +13,7 @@ export type WorkflowContext = {
   hookLogs?: unknown[]
   mockUsage?: unknown[]
   failures?: unknown[]
+  warnings?: string[]
   runSummary?: unknown
   hookState?: {
     workflowStartedAt?: number

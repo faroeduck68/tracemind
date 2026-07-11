@@ -13,6 +13,7 @@ type SummaryOutput = {
   bullets?: unknown[]
   recommendation?: string
   mocked?: boolean
+  sources?: unknown[]
 }
 
 type ReportOutput = {
@@ -52,7 +53,7 @@ const reportOutputFinalTool: TraceMindTool = {
     const docx = findOutput<DownloadOutput>(context, 'downloadUrl')
     const report = findOutput<ReportOutput>(context, 'markdown') ?? findOutput<ReportOutput>(context, 'finalReport')
     const risk = findRiskOutput(context)
-    const summaryOutput = findOutput<SummaryOutput>(context, 'summary')
+    const summaryOutput = findSummaryOutput(context)
     const weather = findWeatherOutput(context)
 
     const markdown = firstText(report?.markdown, report?.finalReport, report?.reportPreview)
@@ -69,6 +70,7 @@ const reportOutputFinalTool: TraceMindTool = {
       riskLevel: risk?.riskLevel,
       risks: Array.isArray(risk?.risks) ? risk?.risks : [],
       recommendation,
+      sources: Array.isArray(summaryOutput?.sources) ? summaryOutput.sources : [],
       reportPreview: (markdown || weatherSummary) ? (markdown || weatherSummary).slice(0, 600) : undefined,
       mocked: Boolean(docx?.mocked || report?.mocked || risk?.mocked || summaryOutput?.mocked),
       source: 'workflow-context'
@@ -86,6 +88,14 @@ const reportOutputFinalTool: TraceMindTool = {
 
 function findOutput<T>(context: Parameters<TraceMindTool['run']>[0], key: string): T | undefined {
   return Object.values(context.nodeOutputs).find((output) => output && typeof output === 'object' && key in output) as T | undefined
+}
+
+function findSummaryOutput(context: Parameters<TraceMindTool['run']>[0]) {
+  return [...Object.values(context.nodeOutputs)]
+    .reverse()
+    .find((output) => output && typeof output === 'object' && typeof (output as SummaryOutput).summary === 'string') as
+    | SummaryOutput
+    | undefined
 }
 
 function findRiskOutput(context: Parameters<TraceMindTool['run']>[0]) {

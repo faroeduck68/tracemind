@@ -3,6 +3,7 @@ import { updateToolCallStats } from '../models/tool.model'
 import { finishToolCallLog } from '../models/toolCallLog.model'
 import { analyzeFailure } from '../services/failureAnalysis.service'
 import { WorkflowContext } from '../types/context'
+import { NodeStatus } from '../types/common'
 import { WorkflowEdge, WorkflowGraph, WorkflowNode } from '../types/workflow'
 import type { HookContext, HookResult } from './hookTypes'
 
@@ -41,7 +42,9 @@ export async function afterNodeTraceHook(ctx: HookContext): Promise<HookResult |
   const latencyMs = Number(ctx.metadata?.latencyMs ?? Date.now() - (state.nodeStartedAt ?? Date.now()))
 
   if (state.traceStepId && !state.traceFinished) {
-    const status = ctx.metadata?.nodeResultStatus === 'partial_success' ? 'partial_success' : 'success'
+    const requestedStatus = ctx.metadata?.nodeResultStatus
+    const status: NodeStatus =
+      requestedStatus === 'partial_success' || requestedStatus === 'skipped' ? requestedStatus : 'success'
     const errorMessage =
       typeof ctx.metadata?.nodeResultErrorMessage === 'string'
         ? ctx.metadata.nodeResultErrorMessage

@@ -127,6 +127,40 @@ export async function testTool(idOrName: string, input: unknown, userId = 'defau
   }
 }
 
+export async function testWebSearch(query: string, userId = 'default_user') {
+  const normalizedQuery = query.trim()
+  if (!normalizedQuery) throw new Error('query is required')
+
+  const startedAt = Date.now()
+  const context = createWorkflowContext({
+    runId: 0,
+    workflowId: 0,
+    userId,
+    query: normalizedQuery,
+    files: [],
+    memories: []
+  })
+  context.currentNodeId = 'web_search_acceptance_test'
+
+  const result = await runTool('web_search_tool', { query: normalizedQuery }, context, {
+    manageToolCallLog: true,
+    manageToolStats: true
+  })
+  if (!result.success) throw new Error(result.errorMessage ?? 'web_search_tool 测试失败。')
+
+  const output = result.output && typeof result.output === 'object' ? (result.output as Record<string, unknown>) : {}
+  return {
+    query: normalizedQuery,
+    results: Array.isArray(output.results) ? output.results : [],
+    sources: Array.isArray(output.sources) ? output.sources : [],
+    summary: typeof output.summary === 'string' ? output.summary : '',
+    provider: typeof output.provider === 'string' ? output.provider : '',
+    resultCount: Number(output.resultCount ?? 0),
+    fallback: output.fallback === true,
+    latencyMs: Date.now() - startedAt
+  }
+}
+
 export async function testDraftTool(input: Record<string, unknown>) {
   const toolType = normalizeToolType(input.type)
   const name = String(input.name ?? `draft_${toolType}_tool`).trim()

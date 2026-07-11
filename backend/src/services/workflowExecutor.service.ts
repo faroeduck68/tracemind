@@ -1,6 +1,7 @@
 import { createToolRankingLogs } from '../models/toolRankingLog.model'
+import { finishToolCallLog } from '../models/toolCallLog.model'
 import { createWorkflowRun, updateWorkflowRunFailed, updateWorkflowRunSuccess } from '../models/workflowRun.model'
-import { findToolByIdOrName } from '../models/tool.model'
+import { findToolByIdOrName, updateToolCallStats } from '../models/tool.model'
 import { toolRegistry } from '../tools'
 import { WorkflowGraph, WorkflowNode } from '../types/workflow'
 import { topologicalSort } from '../utils/topologicalSort'
@@ -69,7 +70,7 @@ export async function runWorkflow(workflowId: number, inputData: Record<string, 
     }
 
     const totalLatencyMs = Date.now() - startedAt
-    const outputData = buildRunOutput(context.finalResult, context.nodeOutputs)
+    const outputData = buildRunOutput(context.finalResult, context.nodeOutputs, context.warnings)
 
     await triggerHooks('AfterWorkflowRun', {
       runId,
@@ -193,20 +194,27 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
 
-function buildRunOutput(finalResult: unknown, nodeOutputs: Record<string, unknown>) {
+function buildRunOutput(finalResult: unknown, nodeOutputs: Record<string, unknown>, warnings: string[] = []) {
   const displayable = collectDisplayableOutput(nodeOutputs)
   const finalRecord = readRecord(finalResult)
   const businessFailure = detectBusinessFailure(finalResult, nodeOutputs)
 
   if (finalRecord) {
-    return attachBusinessOutcome(fillMissingDisplayFields(finalRecord, displayable), businessFailure)
+    return attachWarnings(attachBusinessOutcome(fillMissingDisplayFields(finalRecord, displayable), businessFailure), warnings)
   }
 
   if (typeof finalResult === 'string' && finalResult.trim()) {
-    return attachBusinessOutcome(fillMissingDisplayFields({ summary: finalResult.trim() }, displayable), businessFailure)
+    return attachWarnings(attachBusinessOutcome(fillMissingDisplayFields({ summary: finalResult.trim() }, displayable), businessFailure), warnings)
   }
 
-  return attachBusinessOutcome(Object.keys(displayable).length ? { ...nodeOutputs, ...displayable } : nodeOutputs, businessFailure)
+  return attachWarnings(
+    attachBusinessOutcome(Object.keys(displayable).length ? { ...nodeOutputs, ...displayable } : nodeOutputs, businessFailure),
+    warnings
+  )
+}
+
+function attachWarnings(output: Record<string, unknown>, warnings: string[]) {
+  return warnings.length ? { ...output, warnings: [...new Set(warnings)] } : output
 }
 
 function fillMissingDisplayFields(target: Record<string, unknown>, fallback: Record<string, unknown>) {
@@ -382,6 +390,10 @@ async function executeNode(graph: WorkflowGraph, node: WorkflowNode, context: Re
     })
 
     if (preResult?.blocked) {
+      if (isOptionalNode(node)) {
+        await skipOptionalNode(graph, node, context, inputData, preResult.reason ?? preResult.message, Date.now() - startedAt)
+        return
+      }
       throw await handleNodeError(graph, node, context, inputData, preResult, startedAt)
     }
 
@@ -392,6 +404,10 @@ async function executeNode(graph: WorkflowGraph, node: WorkflowNode, context: Re
     const latencyMs = Date.now() - startedAt
 
     if (!result.success) {
+      if (isOptionalNode(node)) {
+        await skipOptionalNode(graph, node, context, inputData, result.errorMessage ?? result.message, latencyMs, result.output)
+        return
+      }
       const toolError = new Error(result.errorMessage ?? result.message ?? `Tool failed: ${node.tool}`)
       throw await handleNodeError(graph, node, context, inputData, toolError, startedAt, result.output, latencyMs)
     }
@@ -449,8 +465,82 @@ async function executeNode(graph: WorkflowGraph, node: WorkflowNode, context: Re
     if (error instanceof WorkflowExecutionError) throw error
 
     const normalizedError = error instanceof Error ? error : new Error('Unknown tool execution error')
+    if (isOptionalNode(node)) {
+      await skipOptionalNode(graph, node, context, inputData, normalizedError.message, latencyMs)
+      return
+    }
     throw await handleNodeError(graph, node, context, inputData, normalizedError, startedAt, undefined, latencyMs)
   }
+}
+
+function isOptionalNode(node: WorkflowNode) {
+  const config = readRecord(node.config)
+  return config?.optional === true
+}
+
+async function skipOptionalNode(
+  graph: WorkflowGraph,
+  node: WorkflowNode,
+  context: ReturnType<typeof createWorkflowContext>,
+  inputData: unknown,
+  errorMessage: string | undefined,
+  latencyMs: number,
+  toolOutput?: unknown
+) {
+  const warning = buildOptionalNodeWarning(node, errorMessage)
+  const output = {
+    skipped: true,
+    optional: true,
+    warning,
+    errorMessage: errorMessage ?? null,
+    toolOutput: toolOutput ?? null,
+    ...(node.tool === 'web_search_tool' ? { results: [], sources: [], provider: null, resultCount: 0, fallback: false } : {})
+  }
+
+  context.warnings ??= []
+  context.warnings.push(warning)
+  setNodeOutput(node.id, output, context)
+
+  const state = context.hookState?.nodes?.[node.id]
+  if (state?.toolCallLogId && !state.toolCallFinished) {
+    await finishToolCallLog({
+      id: state.toolCallLogId,
+      status: 'failed',
+      outputData: output,
+      errorMessage: warning,
+      latencyMs
+    })
+    state.toolCallFinished = true
+  }
+  if (node.tool && state && !state.toolStatsUpdated) {
+    await updateToolCallStats(node.tool, false, latencyMs)
+    state.toolStatsUpdated = true
+  }
+
+  await triggerHooks('AfterNodeRun', {
+    runId: context.runId,
+    workflowId: graph.id as number,
+    nodeId: node.id,
+    toolName: node.tool,
+    input: inputData,
+    output,
+    context,
+    metadata: {
+      workflow: graph,
+      node,
+      latencyMs,
+      nodeResultStatus: 'skipped',
+      nodeResultErrorMessage: warning,
+      nodeResultReason: warning
+    }
+  })
+}
+
+function buildOptionalNodeWarning(node: WorkflowNode, errorMessage?: string) {
+  if (node.tool === 'web_search_tool' && /未配置搜索服务 Key|missing.*(?:api )?key/i.test(errorMessage ?? '')) {
+    return 'web_search_tool 未配置搜索服务 Key，已跳过外部资料检索。'
+  }
+  return `${node.tool} 执行失败，已跳过可选节点：${errorMessage || '未知错误'}`
 }
 
 async function handleNodeError(

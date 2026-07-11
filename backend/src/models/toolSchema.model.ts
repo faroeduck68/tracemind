@@ -28,7 +28,38 @@ export async function ensureToolConfigSchema() {
   await ensureMcpToolForeignKey()
   await ensureWeatherExampleTool()
   await ensureAmapWeatherToolDefaults()
+  await ensureWebSearchTool()
   toolSchemaReady = true
+}
+
+async function ensureWebSearchTool() {
+  await execute(
+    `INSERT INTO tools
+     (name, display_name, \`type\`, version, category, description, enabled, risk_level, success_rate, avg_latency_ms, call_count, input_schema, output_schema)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       display_name = VALUES(display_name),
+       \`type\` = VALUES(\`type\`),
+       category = VALUES(category),
+       description = VALUES(description),
+       input_schema = VALUES(input_schema),
+       output_schema = VALUES(output_schema)`,
+    [
+      'web_search_tool',
+      '网页搜索工具',
+      'builtin',
+      'v1.0.0',
+      '检索搜索',
+      '根据用户问题搜索互联网实时信息，并返回摘要与来源。',
+      1,
+      'low',
+      0,
+      0,
+      0,
+      stringifyJson({ query: { type: 'string', required: true } }),
+      stringifyJson({ results: 'array', summary: 'string', sources: 'array' })
+    ]
+  )
 }
 
 async function ensureMcpServersTable() {
@@ -146,7 +177,7 @@ async function ensureWeatherExampleTool() {
         type: 'apiKey',
         keyName: 'key',
         in: 'query',
-        value: 'userSecret:AMAP_API_KEY',
+        value: 'userSecret:weather',
         fallback: true
       })
     ]

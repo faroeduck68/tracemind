@@ -8,7 +8,8 @@ import {
   getToolsStats,
   switchTool,
   testDraftTool,
-  testTool
+  testTool,
+  testWebSearch
 } from '../services/tool.service'
 import { sendSuccess } from '../utils/response'
 import { getRequestUserId } from '../utils/requestUser'
@@ -66,6 +67,16 @@ export async function testToolController(req: Request, res: Response) {
 export async function testDraftToolController(req: Request, res: Response) {
   const result = await testDraftTool({ ...(req.body ?? {}), userId: getRequestUserId(req) })
   return sendSuccess(res, result, result.success ? 'Draft tool tested' : 'Draft tool test failed')
+}
+
+export async function testWebSearchController(req: Request, res: Response) {
+  try {
+    const result = await testWebSearch(String(req.body?.query ?? ''), getRequestUserId(req))
+    return sendSuccess(res, result, 'web_search_tool 测试成功')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'web_search_tool 测试失败。'
+    return res.status(400).json({ code: 400, message, data: null })
+  }
 }
 
 function isDuplicateToolNameError(error: unknown) {

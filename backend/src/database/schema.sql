@@ -243,6 +243,7 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
   document_count INT DEFAULT 0 COMMENT '文档数量',
   chunk_count INT DEFAULT 0 COMMENT '切片数量',
   status VARCHAR(30) DEFAULT 'normal' COMMENT '知识库状态：normal、indexing、disabled',
+  owner_user_id VARCHAR(80) DEFAULT 'default_user' COMMENT '知识库所有者用户ID，default_user/public/default 可作为共享默认库',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库表，保存知识库配置和统计信息';
@@ -250,7 +251,9 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
 CREATE TABLE IF NOT EXISTS knowledge_documents (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '知识文档主键ID',
   knowledge_base_id BIGINT NOT NULL COMMENT '所属知识库ID',
+  owner_user_id VARCHAR(80) DEFAULT 'default_user' COMMENT '文档所有者用户ID',
   filename VARCHAR(255) NOT NULL COMMENT '文件名',
+  title VARCHAR(255) COMMENT '文档标题',
   file_type VARCHAR(50) COMMENT '文件类型或 MIME 类型',
   file_size BIGINT COMMENT '文件大小，单位字节',
   file_path VARCHAR(500) COMMENT '文件存储路径',

@@ -7,9 +7,9 @@ import { env } from '../config/env'
 import { callLLM, parseLlmJson } from './llm.service'
 import { classifyDocumentFiles, DocumentClassification } from './documentClassifier.service'
 import { parseJson } from '../utils/json'
+import { hasExplicitWebSearchIntent, isWeatherQuery, needsRealtimeInformation } from './realtimeIntent.service'
 
 const financeKeywords = ['财报', '财务', '风险', '利润', '收入', '现金流']
-const weatherKeywords = ['天气', '气温', 'weather', 'temperature', 'forecast']
 // 触发严格线性财报报告模板（任务书 §10.2）的关键词。
 const linearReportKeywords = ['Word 报告', 'Word报告', '生成报告', '导出报告', '财报风险报告', 'word 报告', 'word报告']
 // 触发现有分支型财报模板（含知识检索 + 综合总结）的关键词。
@@ -40,8 +40,8 @@ const toolDisplayNames: Record<string, string> = {
   intent_classifier: '意图识别工具',
   user_input: '用户输入',
   summary_llm: '总结模型',
-  finance_knowledge_base: '财务知识库检索工具',
   knowledge_search_tool: '知识检索工具',
+  web_search_tool: '网页搜索工具',
   report_output: '报告输出工具'
 }
 
@@ -84,6 +84,11 @@ const candidateToolsByTool: Record<string, Array<{ name: string; score: number }
     { name: 'summary_llm', score: 0.9 },
     { name: 'general_qa_tool', score: 0.58 },
     { name: 'risk_summary_tool', score: 0.48 }
+  ],
+  web_search_tool: [
+    { name: 'web_search_tool', score: 0.97 },
+    { name: 'knowledge_search_tool', score: 0.58 },
+    { name: 'summary_llm', score: 0.42 }
   ]
 }
 
@@ -111,12 +116,20 @@ export function selectFinanceTemplate(query: string): FinanceTemplate {
 export async function generateWorkflowFromQuery(
   query: string,
   memories: unknown[] = [],
-  options: { files?: unknown[] } = {}
+  options: { files?: unknown[]; fileIds?: Array<string | number>; attachments?: unknown[] } = {}
 ): Promise<WorkflowGraph> {
   const availableTools = await getPlannerTools()
   const weatherTool = findWeatherTool(availableTools)
-  if (isWeatherQuery(query) && !weatherTool) {
-    throw new Error('当前系统没有天气查询工具，无法实时查询天气。可以为系统新增 weather_query_tool 后支持该能力。')
+  const webSearchTool = findWebSearchTool(availableTools)
+  const files = collectUploadedFiles(options)
+  const hasUploadedFiles = files.length > 0 || Boolean(options.fileIds?.length)
+  const explicitWebSearch = hasExplicitWebSearchIntent(query)
+
+  if (!hasUploadedFiles && isWeatherQuery(query) && !weatherTool && !webSearchTool) {
+    throw new Error('当前系统没有联网查询能力：weather_query_tool 和 web_search_tool 均不可用。')
+  }
+  if (!hasUploadedFiles && needsRealtimeInformation(query) && !isWeatherQuery(query) && !webSearchTool) {
+    throw new Error('当前系统没有联网查询能力：web_search_tool 不可用。')
   }
 
   const promptContext = { memories }
@@ -136,31 +149,30 @@ export async function generateWorkflowFromQuery(
 
   let graph: WorkflowGraph
   let source = 'rule_engine'
-  const files = Array.isArray(options.files) ? options.files : []
   const documentClassification = files.length ? await classifyDocumentFiles(files) : null
 
-  if (isWeatherQuery(query) && weatherTool && shouldUseMockWorkflowGenerator()) {
+  if (hasUploadedFiles) {
+    if (documentClassification?.type === 'financial' || wantsFinancialAnalysis(query)) {
+      graph = buildLinearFinanceWorkflow(query, memories)
+      source = documentClassification?.type === 'financial' ? 'document_classifier' : 'file_intent_financial_analysis'
+    } else {
+      graph = buildDocumentSummaryWorkflow(query, memories, documentClassification ?? undefined)
+      source = documentClassification?.type === 'document' ? 'document_classifier' : 'generic_file_analysis'
+    }
+
+    if (explicitWebSearch && webSearchTool) {
+      graph = addOptionalWebSearchEnrichment(graph, webSearchTool)
+      source = `${source}_with_optional_web_enrichment`
+    }
+  } else if (isWeatherQuery(query) && weatherTool) {
     graph = buildSingleToolWorkflow(query, weatherTool, memories)
     source = 'database_tool_rule_engine'
-  } else if (documentClassification?.type === 'unknown') {
-    if (wantsDocumentSummary(query)) {
-      graph = buildDocumentSummaryWorkflow(query, memories, documentClassification)
-      source = 'user_clarified_document_summary'
-    } else if (wantsFinancialAnalysis(query)) {
-      graph = buildLinearFinanceWorkflow(query, memories)
-      source = 'user_clarified_financial_analysis'
-    } else {
-      throw new Error('无法判断文档类型。请告诉我你想对这个文件做“文档总结”还是“财务分析”？')
-    }
-  } else if (documentClassification?.type === 'document' && wantsFinancialAnalysis(query)) {
-    graph = buildLinearFinanceWorkflow(query, memories)
-    source = 'user_requested_financial_analysis'
-  } else if (documentClassification?.type === 'document') {
-    graph = buildDocumentSummaryWorkflow(query, memories, documentClassification)
-    source = 'document_classifier'
-  } else if (documentClassification?.type === 'financial') {
-    graph = buildLinearFinanceWorkflow(query, memories)
-    source = 'document_classifier'
+  } else if (explicitWebSearch && webSearchTool) {
+    graph = buildWebSearchWorkflow(query, webSearchTool, memories)
+    source = 'explicit_web_search_rule_engine'
+  } else if (needsRealtimeInformation(query) && webSearchTool) {
+    graph = buildWebSearchWorkflow(query, webSearchTool, memories)
+    source = 'realtime_web_search_rule_engine'
   } else if (shouldUseMockWorkflowGenerator()) {
     graph = buildRuleWorkflow(query, memories)
     source = 'mock_rule_engine'
@@ -194,17 +206,19 @@ export async function generateWorkflowFromQuery(
   return graph
 }
 
+function collectUploadedFiles(options: { files?: unknown[]; attachments?: unknown[] }) {
+  return [
+    ...(Array.isArray(options.files) ? options.files : []),
+    ...(Array.isArray(options.attachments) ? options.attachments : [])
+  ]
+}
+
 function wantsDocumentSummary(query: string) {
   return ['文档总结', '总结文档', '内容摘要', '总结', '概括', '提炼'].some((keyword) => query.includes(keyword))
 }
 
 function wantsFinancialAnalysis(query: string) {
   return ['财务分析', '财报分析', '分析财报', '财务风险', '财务指标'].some((keyword) => query.includes(keyword))
-}
-
-function isWeatherQuery(query: string) {
-  const normalized = query.toLowerCase()
-  return weatherKeywords.some((keyword) => normalized.includes(keyword))
 }
 
 function normalizeToolFields(graph: WorkflowGraph, availableTools: PlannerTool[] = []): WorkflowGraph {
@@ -377,10 +391,15 @@ async function getPlannerTools(): Promise<PlannerTool[]> {
 }
 
 function findWeatherTool(tools: PlannerTool[]) {
-  return tools.find((tool) => {
+  return tools.find((tool) => tool.name === 'weather_query_tool') ?? tools.find((tool) => {
+    if (tool.name === 'web_search_tool') return false
     const text = `${tool.name} ${tool.displayName} ${tool.description ?? ''}`.toLowerCase()
-    return weatherKeywords.some((keyword) => text.includes(keyword.toLowerCase())) || text.includes('天气')
+    return ['weather', 'forecast', 'temperature', '天气', '气温', '预报'].some((keyword) => text.includes(keyword))
   })
+}
+
+function findWebSearchTool(tools: PlannerTool[]) {
+  return tools.find((tool) => tool.name === 'web_search_tool')
 }
 
 function withIdle(nodes: WorkflowNode[]): WorkflowNode[] {
@@ -593,9 +612,15 @@ function buildFinancialWorkflow(query: string, memories: unknown[]): WorkflowGra
       position: { x: 340, y: 334 },
       status: 'idle',
       tone: 'violet',
-      tool: 'finance_knowledge_base',
+      tool: 'knowledge_search_tool',
       confidence: 0.86,
-      reason: '引入行业风险知识和财报解读经验，辅助生成更可信的解释。'
+      reason: '引入行业风险知识和财报解读经验，辅助生成更可信的解释。',
+      config: {
+        knowledgeBaseType: 'finance',
+        queryTemplate: '制造业 财务风险 资产负债率 经营现金流 盈利能力',
+        retrievalMode: 'keyword',
+        topK: 5
+      }
     },
     {
       id: 'summary',
@@ -881,6 +906,127 @@ function buildSingleToolWorkflow(query: string, tool: PlannerTool, memories: unk
     edges: [
       { id: 'e-start-tool', source: 'start', target: 'tool_call' },
       { id: 'e-tool-output', source: 'tool_call', target: 'output' }
+    ]
+  }
+}
+
+function addOptionalWebSearchEnrichment(graph: WorkflowGraph, tool: PlannerTool): WorkflowGraph {
+  const sourceNode = graph.nodes.find((node) => node.tool === 'pdf_parse_tool') ?? graph.nodes.find((node) => node.type === 'input')
+  const targetNode =
+    graph.nodes.find((node) => node.tool === 'report_generate_tool') ??
+    graph.nodes.find((node) => node.id === 'content_summary') ??
+    graph.nodes.find((node) => node.tool === 'summary_llm') ??
+    graph.nodes.find((node) => node.tool === 'report_output_tool')
+
+  if (!sourceNode || !targetNode || graph.nodes.some((node) => node.tool === 'web_search_tool')) return graph
+
+  const webSearchNode: WorkflowNode = {
+    id: 'web_search_enrichment',
+    type: 'tool',
+    label: '外部资料检索',
+    subLabel: '可选：补充网上行业资料',
+    icon: 'Globe2',
+    position: {
+      x: Math.round((sourceNode.position.x + targetNode.position.x) / 2),
+      y: Math.max(sourceNode.position.y, targetNode.position.y) + 190
+    },
+    status: 'idle',
+    tone: 'blue',
+    tool: tool.name,
+    confidence: 0.88,
+    reason: '用户明确要求结合网上资料；该节点仅用于补充外部证据，不属于文件分析主链路。',
+    config: {
+      optional: true,
+      skipOnMissingConfig: true,
+      tool: 'web_search_tool'
+    },
+    inputSchema: tool.inputSchema,
+    outputSchema: tool.outputSchema
+  }
+
+  return {
+    ...graph,
+    description: `${graph.description ?? ''} 外部网页检索为可选增强，失败时继续基于上传文件分析。`.trim(),
+    nodes: [...graph.nodes, webSearchNode],
+    edges: [
+      ...graph.edges,
+      { id: `e-${sourceNode.id}-web-search-enrichment`, source: sourceNode.id, target: webSearchNode.id, branch: 'alt' },
+      { id: `e-web-search-enrichment-${targetNode.id}`, source: webSearchNode.id, target: targetNode.id, branch: 'alt' }
+    ]
+  }
+}
+
+function buildWebSearchWorkflow(query: string, tool: PlannerTool, memories: unknown[]): WorkflowGraph {
+  const nodes = withIdle([
+    {
+      id: 'start',
+      type: 'input',
+      label: '用户输入',
+      subLabel: '接收实时查询',
+      icon: 'CirclePlay',
+      position: { x: 60, y: 220 },
+      status: 'idle',
+      tone: 'green',
+      tool: 'user_input',
+      confidence: 0.98,
+      reason: '接收需要实时信息的用户问题。'
+    },
+    {
+      id: 'web_search',
+      type: 'tool',
+      label: tool.displayName,
+      subLabel: '检索实时网页信息与来源',
+      icon: 'Globe2',
+      position: { x: 280, y: 220 },
+      status: 'idle',
+      tone: 'blue',
+      tool: tool.name,
+      confidence: 0.96,
+      reason: '问题包含实时信息意图，必须先联网搜索，不能依赖模型固有知识猜测。',
+      inputSchema: tool.inputSchema,
+      outputSchema: tool.outputSchema
+    },
+    {
+      id: 'summary',
+      type: 'summary',
+      label: '搜索结果总结',
+      subLabel: '基于搜索证据生成回答',
+      icon: 'ClipboardCheck',
+      position: { x: 500, y: 220 },
+      status: 'idle',
+      tone: 'amber',
+      tool: 'summary_llm',
+      confidence: 0.92,
+      reason: '回答必须以网页搜索结果为依据，并保留来源链接。'
+    },
+    {
+      id: 'output',
+      type: 'output',
+      label: '结果输出',
+      subLabel: '返回回答与来源',
+      icon: 'PanelRightOpen',
+      position: { x: 720, y: 220 },
+      status: 'idle',
+      tone: 'cyan',
+      tool: 'report_output_tool',
+      confidence: 0.9,
+      reason: '输出基于实时搜索证据生成的最终回答。'
+    }
+  ])
+
+  return {
+    name: '网页实时搜索 Workflow',
+    description: `搜索互联网实时信息并基于来源回答。已参考 ${memories.length} 条记忆。`,
+    sourceType: 'generated',
+    originalQuery: query,
+    intent: 'web_search_answer',
+    confidence: 0.94,
+    status: 'draft',
+    nodes,
+    edges: [
+      { id: 'e-start-search', source: 'start', target: 'web_search' },
+      { id: 'e-search-summary', source: 'web_search', target: 'summary' },
+      { id: 'e-summary-output', source: 'summary', target: 'output' }
     ]
   }
 }

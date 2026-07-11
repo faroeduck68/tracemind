@@ -18,9 +18,21 @@ import { parseJson } from '../utils/json'
 import { validateDag } from '../utils/dagValidator'
 import { generateWorkflowFromQuery } from './workflowGenerator.service'
 
-export async function generateAndSaveWorkflow(query: string, files: unknown[] = [], options: { conversationId?: string | null } = {}) {
+export async function generateAndSaveWorkflow(
+  query: string,
+  files: unknown[] = [],
+  options: {
+    conversationId?: string | null
+    fileIds?: Array<string | number>
+    attachments?: unknown[]
+  } = {}
+) {
   const memories = await listEnabledMemories(5)
-  const graph = await generateWorkflowFromQuery(query, memories, { files })
+  const graph = await generateWorkflowFromQuery(query, memories, {
+    files,
+    fileIds: options.fileIds,
+    attachments: options.attachments
+  })
   const id = await createWorkflowWithGraph(graph, { conversationId: options.conversationId })
   return { ...graph, id, conversationId: options.conversationId ?? null }
 }
