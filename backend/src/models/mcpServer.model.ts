@@ -1,5 +1,6 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { execute, query } from '../config/db'
+import { pageResult, PaginationOptions, PageResult } from '../utils/pagination'
 import { ensureToolConfigSchema } from './toolSchema.model'
 
 export type McpServerRow = RowDataPacket & {
@@ -23,13 +24,18 @@ export type McpServerInput = {
   status?: string
 }
 
-export async function listMcpServers() {
+export async function listMcpServers(): Promise<McpServerRow[]>
+export async function listMcpServers(pagination: PaginationOptions): Promise<PageResult<McpServerRow>>
+export async function listMcpServers(pagination?: PaginationOptions) {
   await ensureToolConfigSchema()
-  return query<McpServerRow[]>(
-    `SELECT id, name, display_name, endpoint, transport, enabled, status, created_at, updated_at
-     FROM mcp_servers
-     ORDER BY id DESC`
-  )
+  const sql = `SELECT id, name, display_name, endpoint, transport, enabled, status, created_at, updated_at
+               FROM mcp_servers
+               ORDER BY id DESC`
+  if (!pagination) return query<McpServerRow[]>(sql)
+
+  const rows = await query<McpServerRow[]>(`${sql} LIMIT ? OFFSET ?`, [pagination.pageSize, pagination.offset])
+  const totalRows = await query<(RowDataPacket & { total: number })[]>('SELECT COUNT(*) AS total FROM mcp_servers')
+  return pageResult(rows, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 export async function findMcpServerById(id: number) {

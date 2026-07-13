@@ -130,7 +130,7 @@ function deriveKnowledgeInputFields(node: WorkflowNode) {
   if (node.tool !== 'knowledge_search_tool' && node.tool !== 'finance_knowledge_base') return {}
   const config = node.config && typeof node.config === 'object' ? (node.config as Record<string, unknown>) : {}
   return Object.fromEntries(
-    ['knowledgeBaseId', 'retrievalMode', 'topK', 'knowledgeBaseType']
+    ['knowledgeBaseId', 'knowledgeBaseName', 'retrievalMode', 'topK', 'knowledgeBaseType']
       .filter((key) => config[key] != null)
       .map((key) => [key, config[key]])
   )

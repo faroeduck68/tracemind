@@ -14,9 +14,11 @@ import { env } from '../config/env'
 import { getConversationWorkflows } from '../services/workflow.service'
 import { sendSuccess } from '../utils/response'
 import { makeKey } from '../utils/uuid'
+import { readPagination } from '../utils/pagination'
 
-export async function listConversationsController(_req: Request, res: Response) {
-  return sendSuccess(res, await listConversations())
+export async function listConversationsController(req: Request, res: Response) {
+  const pagination = readPagination(req.query)
+  return sendSuccess(res, pagination ? await listConversations(pagination) : await listConversations())
 }
 
 export async function createConversationController(req: Request, res: Response) {
@@ -45,7 +47,8 @@ export async function listConversationMessagesController(req: Request, res: Resp
     return sendSuccess(res, null, 'conversation id is required', 400)
   }
 
-  return sendSuccess(res, await listMessagesByConversation(conversationId))
+  const pagination = readPagination(req.query)
+  return sendSuccess(res, pagination ? await listMessagesByConversation(conversationId, pagination) : await listMessagesByConversation(conversationId))
 }
 
 export async function listConversationWorkflowsController(req: Request, res: Response) {
@@ -54,7 +57,7 @@ export async function listConversationWorkflowsController(req: Request, res: Res
     return sendSuccess(res, null, 'conversation id is required', 400)
   }
 
-  return sendSuccess(res, await getConversationWorkflows(conversationId))
+  return sendSuccess(res, await getConversationWorkflows(conversationId, readPagination(req.query) ?? undefined))
 }
 
 export async function appendConversationMessageController(req: Request, res: Response) {

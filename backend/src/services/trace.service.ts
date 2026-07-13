@@ -1,6 +1,7 @@
-import { findWorkflowRunById, listRecentWorkflowRuns } from '../models/workflowRun.model'
+import { findWorkflowRunById, listRecentWorkflowRuns, listRecentWorkflowRunsPaginated, WorkflowRunRow } from '../models/workflowRun.model'
 import { listTraceStepsByRunId, TraceStepRow } from '../models/traceStep.model'
 import { parseJson } from '../utils/json'
+import { mapPageResult, PaginationOptions } from '../utils/pagination'
 import { summarize } from '../utils/summarize'
 import { formatClock, formatLatency } from '../utils/time'
 import { getWorkflow } from './workflow.service'
@@ -50,9 +51,15 @@ export async function getRunDetail(runId: number) {
   }
 }
 
-export async function getRunHistory(limit = 50) {
-  const rows = await listRecentWorkflowRuns(limit)
-  return rows.map((run) => ({
+export async function getRunHistory(limitOrPagination: number | PaginationOptions = 50) {
+  const rows = typeof limitOrPagination === 'number'
+    ? await listRecentWorkflowRuns(limitOrPagination)
+    : await listRecentWorkflowRunsPaginated(limitOrPagination)
+  return Array.isArray(rows) ? rows.map(mapRunHistoryRow) : mapPageResult(rows, mapRunHistoryRow)
+}
+
+function mapRunHistoryRow(run: WorkflowRunRow) {
+  return {
     id: run.id,
     workflowId: run.workflow_id,
     workflowName: run.workflow_name,
@@ -69,7 +76,7 @@ export async function getRunHistory(limit = 50) {
     failureAnalysis: parseJson(run.failure_analysis, null),
     startedAt: run.started_at,
     finishedAt: run.finished_at
-  }))
+  }
 }
 
 export async function getRunReplay(runId: number) {

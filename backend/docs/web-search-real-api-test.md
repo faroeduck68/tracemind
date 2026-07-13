@@ -16,6 +16,7 @@ WEB_SEARCH_PROVIDER=tavily
 | Brave Search | `BRAVE_SEARCH_API_KEY` | https://brave.com/search/api/ |
 | SerpAPI | `SERPAPI_API_KEY` | https://serpapi.com/ |
 | Bing Web Search | `BING_SEARCH_API_KEY` | Azure Bing Search 资源 |
+| 阿里云 OpenSearch | `ALIYUN_OPENSEARCH_API_KEY`、`ALIYUN_OPENSEARCH_ENDPOINT`、`ALIYUN_OPENSEARCH_WORKSPACE` | 阿里云 AI Search Open Platform |
 
 完整示例：
 
@@ -29,12 +30,23 @@ WEB_SEARCH_MAX_TOTAL_LENGTH=6000
 WEB_SEARCH_TIMEOUT_MS=12000
 ```
 
+阿里云 OpenSearch 示例：
+
+```env
+WEB_SEARCH_PROVIDER=aliyun
+ALIYUN_OPENSEARCH_API_KEY=OS-your-key
+ALIYUN_OPENSEARCH_ENDPOINT=https://your-public-endpoint
+ALIYUN_OPENSEARCH_WORKSPACE=default
+```
+
+`ALIYUN_OPENSEARCH_ENDPOINT` 可以填写阿里云控制台复制的 Public API Endpoint。如果你已经复制了完整接口地址，也可以直接填完整的 `/v3/openapi/workspaces/.../web-search/ops-web-search-001` 地址。
+
 `WEB_SEARCH_PROVIDER` 指定的服务会优先调用。如果该服务请求失败，并且其他服务也配置了 Key，工具会依次尝试其他服务，此时输出中的 `fallback` 为 `true`。
 
-如果没有配置任何 Key，接口返回：
+如果没有配置任何搜索服务，接口返回：
 
 ```text
-web_search_tool 未配置搜索服务 Key，请在后端 .env 中配置 Tavily/Brave/SerpAPI/Bing 任一搜索服务 Key。
+web_search_tool 未配置搜索服务，请在后端 .env 中配置 Tavily/Brave/SerpAPI/Bing/阿里云 OpenSearch 任一搜索服务。
 ```
 
 ## 2. npm 直接验收

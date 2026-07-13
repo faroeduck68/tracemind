@@ -1,6 +1,7 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { execute, query } from '../config/db'
 import { stringifyJson } from '../utils/json'
+import { pageResult, PaginationOptions, PageResult } from '../utils/pagination'
 import { ensureToolConfigSchema } from './toolSchema.model'
 
 export type ToolType = 'builtin' | 'http' | 'llm' | 'mcp'
@@ -53,14 +54,19 @@ export type ToolInput = {
   auth_config?: unknown
 }
 
-export async function listTools() {
+export async function listTools(): Promise<ToolRow[]>
+export async function listTools(pagination: PaginationOptions): Promise<PageResult<ToolRow>>
+export async function listTools(pagination?: PaginationOptions) {
   await ensureToolConfigSchema()
-  return query<ToolRow[]>(
-    `SELECT id, name, display_name, \`type\`, source, mcp_server_id, mcp_tool_name, version, category, description, enabled, risk_level, success_rate, avg_latency_ms, call_count,
-            config_schema, input_schema, output_schema, config_json, auth_config, created_at, updated_at
-     FROM tools
-     ORDER BY category ASC, id ASC`
-  )
+  const sql = `SELECT id, name, display_name, \`type\`, source, mcp_server_id, mcp_tool_name, version, category, description, enabled, risk_level, success_rate, avg_latency_ms, call_count,
+                      config_schema, input_schema, output_schema, config_json, auth_config, created_at, updated_at
+               FROM tools
+               ORDER BY category ASC, id ASC`
+  if (!pagination) return query<ToolRow[]>(sql)
+
+  const rows = await query<ToolRow[]>(`${sql} LIMIT ? OFFSET ?`, [pagination.pageSize, pagination.offset])
+  const total = await countRows('tools')
+  return pageResult(rows, total, pagination)
 }
 
 export async function findToolByIdOrName(idOrName: string) {
@@ -173,4 +179,9 @@ export async function getToolStats() {
   )
 
   return rows[0]
+}
+
+async function countRows(tableName: string) {
+  const rows = await query<(RowDataPacket & { total: number })[]>(`SELECT COUNT(*) AS total FROM ${tableName}`)
+  return Number(rows[0]?.total ?? 0)
 }

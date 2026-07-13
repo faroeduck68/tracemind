@@ -1,6 +1,7 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { execute, query } from '../config/db'
 import { parseJson, stringifyJson } from '../utils/json'
+import { pageResult, PaginationOptions, PageResult } from '../utils/pagination'
 
 export type ConversationRow = RowDataPacket & {
   id: string
@@ -25,6 +26,31 @@ export type MessageRow = RowDataPacket & {
   usage_json: unknown
   sequence: number | null
   created_at: string
+}
+
+export type ConversationListItem = {
+  id: string
+  title: string
+  model: string
+  status: string
+  lastMessage: string
+  lastMessageAt?: string
+  totalTokens: number
+  updatedAt: string
+  createdAt: string
+  messageCount: number
+}
+
+export type MessageListItem = {
+  id: number
+  conversationId: string
+  role: string
+  content: string
+  metadata: unknown
+  model?: string
+  usage: unknown
+  sequence?: number
+  createdAt: string
 }
 
 let chatTablesReady = false
@@ -185,10 +211,11 @@ export async function createMessage(input: {
   return result.insertId
 }
 
-export async function listConversations() {
+export async function listConversations(): Promise<ConversationListItem[]>
+export async function listConversations(pagination: PaginationOptions): Promise<PageResult<ConversationListItem>>
+export async function listConversations(pagination?: PaginationOptions): Promise<ConversationListItem[] | PageResult<ConversationListItem>> {
   await ensureChatTables()
-  const rows = await query<(ConversationRow & { message_count: number })[]>(
-    `SELECT
+  const sql = `SELECT
        c.id,
        c.title,
        c.model,
@@ -203,9 +230,11 @@ export async function listConversations() {
      LEFT JOIN messages m ON m.conversation_id = c.id
      GROUP BY c.id, c.title, c.model, c.status, c.last_message, c.last_message_at, c.total_tokens, c.created_at, c.updated_at
      ORDER BY c.updated_at DESC, c.created_at DESC`
-  )
+  const rows = pagination
+    ? await query<(ConversationRow & { message_count: number })[]>(`${sql} LIMIT ? OFFSET ?`, [pagination.pageSize, pagination.offset])
+    : await query<(ConversationRow & { message_count: number })[]>(sql)
 
-  return rows.map((row) => ({
+  const mapped = rows.map((row) => ({
     id: row.id,
     title: row.title,
     model: row.model,
@@ -217,6 +246,10 @@ export async function listConversations() {
     createdAt: row.created_at,
     messageCount: Number(row.message_count ?? 0)
   }))
+  if (!pagination) return mapped
+
+  const totalRows = await query<(RowDataPacket & { total: number })[]>('SELECT COUNT(*) AS total FROM conversations')
+  return pageResult(mapped, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 export async function deleteConversation(id: string) {
@@ -260,17 +293,22 @@ export async function listRecentMessages(conversationId: string, limit = 10) {
   }))
 }
 
-export async function listMessagesByConversation(conversationId: string) {
+export async function listMessagesByConversation(conversationId: string): Promise<MessageListItem[]>
+export async function listMessagesByConversation(conversationId: string, pagination: PaginationOptions): Promise<PageResult<MessageListItem>>
+export async function listMessagesByConversation(
+  conversationId: string,
+  pagination?: PaginationOptions
+): Promise<MessageListItem[] | PageResult<MessageListItem>> {
   await ensureChatTables()
-  const rows = await query<MessageRow[]>(
-    `SELECT id, conversation_id, role, content, metadata_json, model, usage_json, sequence, created_at
-     FROM messages
-     WHERE conversation_id = ?
-     ORDER BY created_at ASC, id ASC`,
-    [conversationId]
-  )
+  const sql = `SELECT id, conversation_id, role, content, metadata_json, model, usage_json, sequence, created_at
+               FROM messages
+               WHERE conversation_id = ?
+               ORDER BY created_at ASC, id ASC`
+  const rows = pagination
+    ? await query<MessageRow[]>(`${sql} LIMIT ? OFFSET ?`, [conversationId, pagination.pageSize, pagination.offset])
+    : await query<MessageRow[]>(sql, [conversationId])
 
-  return rows.map((row) => ({
+  const mapped = rows.map((row) => ({
     id: row.id,
     conversationId: row.conversation_id,
     role: row.role,
@@ -281,6 +319,13 @@ export async function listMessagesByConversation(conversationId: string) {
     sequence: row.sequence ?? undefined,
     createdAt: row.created_at
   }))
+  if (!pagination) return mapped
+
+  const totalRows = await query<(RowDataPacket & { total: number })[]>(
+    'SELECT COUNT(*) AS total FROM messages WHERE conversation_id = ?',
+    [conversationId]
+  )
+  return pageResult(mapped, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 function readUsageTokens(usage: unknown) {

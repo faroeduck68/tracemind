@@ -9,13 +9,16 @@ import {
   listWorkflows,
   listWorkflowsByConversationId,
   nodeRowToWorkflowNode,
-  updateWorkflowWithGraph
+  updateWorkflowWithGraph,
+  WorkflowHistoryRow,
+  WorkflowRow
 } from '../models/workflow.model'
-import { listWorkflowRuns } from '../models/workflowRun.model'
+import { listWorkflowRuns, WorkflowRunRow } from '../models/workflowRun.model'
 import { listEnabledMemories } from '../models/memory.model'
 import { WorkflowGraph } from '../types/workflow'
 import { parseJson } from '../utils/json'
 import { validateDag } from '../utils/dagValidator'
+import { mapPageResult, PaginationOptions } from '../utils/pagination'
 import { generateWorkflowFromQuery } from './workflowGenerator.service'
 
 export async function generateAndSaveWorkflow(
@@ -87,9 +90,9 @@ export async function getWorkflowGraphForExecution(id: number): Promise<Workflow
   }
 }
 
-export async function getWorkflowList() {
-  const workflows = await listWorkflows()
-  return workflows.map((workflow) => ({
+export async function getWorkflowList(pagination?: PaginationOptions) {
+  const workflows = pagination ? await listWorkflows(pagination) : await listWorkflows()
+  const mapper = (workflow: WorkflowRow) => ({
     id: workflow.id,
     name: workflow.name,
     description: workflow.description,
@@ -105,7 +108,8 @@ export async function getWorkflowList() {
     workflowJson: parseJson(workflow.workflow_json, null),
     createdAt: workflow.created_at,
     updatedAt: workflow.updated_at
-  }))
+  })
+  return Array.isArray(workflows) ? workflows.map(mapper) : mapPageResult(workflows, mapper)
 }
 
 export async function updateWorkflow(id: number, graph: WorkflowGraph) {
@@ -118,19 +122,19 @@ export async function removeWorkflow(id: number) {
   return deleteWorkflowById(id)
 }
 
-export async function getWorkflowHistory() {
-  const rows = await listWorkflowHistory()
-  return rows.map(mapWorkflowHistoryRow)
+export async function getWorkflowHistory(pagination?: PaginationOptions) {
+  const rows = pagination ? await listWorkflowHistory(pagination) : await listWorkflowHistory()
+  return Array.isArray(rows) ? rows.map(mapWorkflowHistoryRow) : mapPageResult(rows, mapWorkflowHistoryRow)
 }
 
-export async function getConversationWorkflows(conversationId: string) {
-  const rows = await listWorkflowsByConversationId(conversationId)
-  return rows.map(mapWorkflowHistoryRow)
+export async function getConversationWorkflows(conversationId: string, pagination?: PaginationOptions) {
+  const rows = pagination ? await listWorkflowsByConversationId(conversationId, pagination) : await listWorkflowsByConversationId(conversationId)
+  return Array.isArray(rows) ? rows.map(mapWorkflowHistoryRow) : mapPageResult(rows, mapWorkflowHistoryRow)
 }
 
-export async function getWorkflowRuns(workflowId: number) {
-  const rows = await listWorkflowRuns(workflowId)
-  return rows.map((run) => ({
+export async function getWorkflowRuns(workflowId: number, pagination?: PaginationOptions) {
+  const rows = pagination ? await listWorkflowRuns(workflowId, pagination) : await listWorkflowRuns(workflowId)
+  const mapper = (run: WorkflowRunRow) => ({
     id: run.id,
     workflowId: run.workflow_id,
     workflowName: run.workflow_name,
@@ -147,10 +151,11 @@ export async function getWorkflowRuns(workflowId: number) {
     failureAnalysis: parseJson(run.failure_analysis, null),
     startedAt: run.started_at,
     finishedAt: run.finished_at
-  }))
+  })
+  return Array.isArray(rows) ? rows.map(mapper) : mapPageResult(rows, mapper)
 }
 
-function mapWorkflowHistoryRow(row: Awaited<ReturnType<typeof listWorkflowHistory>>[number]) {
+function mapWorkflowHistoryRow(row: WorkflowHistoryRow) {
   return {
     id: row.id,
     name: row.name,

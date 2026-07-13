@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { generateWorkflowFromQuery } from '../services/workflowGenerator.service'
 import { hasExplicitWebSearchIntent, needsRealtimeInformation } from '../services/realtimeIntent.service'
+import { closePool } from '../config/db'
 
 async function main() {
   assert.equal(needsRealtimeInformation('请分析当前的项目报告'), false, '“当前的项目报告”不应触发实时搜索')
@@ -36,4 +37,6 @@ async function main() {
 main().catch((error) => {
   console.error(error)
   process.exitCode = 1
+}).finally(async () => {
+  await closePool()
 })

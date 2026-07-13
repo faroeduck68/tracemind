@@ -1,6 +1,7 @@
 import { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { execute, query, withTransaction } from '../config/db'
 import { stringifyJson } from '../utils/json'
+import { pageResult, PaginationOptions, PageResult } from '../utils/pagination'
 
 export type RetrievalMode = 'keyword' | 'fulltext' | 'hybrid' | 'vector'
 
@@ -71,6 +72,8 @@ export type KnowledgeDocumentInput = {
   chunks: Array<{ content: string; metadata?: Record<string, unknown> }>
 }
 
+export type KnowledgeBaseUpdateInput = Omit<KnowledgeBaseInput, 'owner_user_id'>
+
 let knowledgeSchemaReady = false
 
 export async function ensureKnowledgeSchema() {
@@ -82,16 +85,24 @@ export async function ensureKnowledgeSchema() {
   knowledgeSchemaReady = true
 }
 
-export async function listKnowledgeBases(ownerUserId: string) {
+export async function listKnowledgeBases(ownerUserId: string): Promise<KnowledgeBaseRow[]>
+export async function listKnowledgeBases(ownerUserId: string, pagination: PaginationOptions): Promise<PageResult<KnowledgeBaseRow>>
+export async function listKnowledgeBases(ownerUserId: string, pagination?: PaginationOptions) {
   await ensureKnowledgeSchema()
-  return query<KnowledgeBaseRow[]>(
-    `SELECT id, name, description, embedding_model, chunk_size, chunk_overlap, retrieval_mode, top_k,
-            document_count, chunk_count, status, owner_user_id, created_at, updated_at
-     FROM knowledge_bases
-     WHERE ${visibleKnowledgeBaseWhere()}
-     ORDER BY updated_at DESC`,
-    visibleKnowledgeBaseParams(ownerUserId)
+  const sql = `SELECT id, name, description, embedding_model, chunk_size, chunk_overlap, retrieval_mode, top_k,
+                      document_count, chunk_count, status, owner_user_id, created_at, updated_at
+               FROM knowledge_bases
+               WHERE ${visibleKnowledgeBaseWhere()}
+               ORDER BY updated_at DESC`
+  const params = visibleKnowledgeBaseParams(ownerUserId)
+  if (!pagination) return query<KnowledgeBaseRow[]>(sql, params)
+
+  const rows = await query<KnowledgeBaseRow[]>(`${sql} LIMIT ? OFFSET ?`, [...params, pagination.pageSize, pagination.offset])
+  const totalRows = await query<(RowDataPacket & { total: number })[]>(
+    `SELECT COUNT(*) AS total FROM knowledge_bases WHERE ${visibleKnowledgeBaseWhere()}`,
+    params
   )
+  return pageResult(rows, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 export async function findKnowledgeBaseById(id: number, ownerUserId: string) {
@@ -105,6 +116,20 @@ export async function findKnowledgeBaseById(id: number, ownerUserId: string) {
     [id, ...visibleKnowledgeBaseParams(ownerUserId)]
   )
 
+  return rows[0] ?? null
+}
+
+export async function findKnowledgeBaseByName(name: string, ownerUserId: string) {
+  await ensureKnowledgeSchema()
+  const rows = await query<KnowledgeBaseRow[]>(
+    `SELECT id, name, description, embedding_model, chunk_size, chunk_overlap, retrieval_mode, top_k,
+            document_count, chunk_count, status, owner_user_id, created_at, updated_at
+     FROM knowledge_bases
+     WHERE name = ? AND ${visibleKnowledgeBaseWhere()}
+     ORDER BY CASE WHEN owner_user_id = ? THEN 0 ELSE 1 END, updated_at DESC
+     LIMIT 1`,
+    [name, ...visibleKnowledgeBaseParams(ownerUserId), ownerUserId]
+  )
   return rows[0] ?? null
 }
 
@@ -145,6 +170,37 @@ export async function createKnowledgeBase(input: KnowledgeBaseInput) {
   )
 
   return result.insertId
+}
+
+export async function updateKnowledgeBaseById(id: number, ownerUserId: string, input: KnowledgeBaseUpdateInput) {
+  await ensureKnowledgeSchema()
+  const result = await execute<ResultSetHeader>(
+    `UPDATE knowledge_bases
+     SET name = ?, description = ?, embedding_model = ?, chunk_size = ?, chunk_overlap = ?,
+         retrieval_mode = ?, top_k = ?
+     WHERE id = ? AND owner_user_id = ?`,
+    [
+      input.name,
+      input.description ?? null,
+      input.embedding_model ?? 'local-keyword-v1',
+      input.chunk_size,
+      input.chunk_overlap,
+      input.retrieval_mode,
+      input.top_k,
+      id,
+      ownerUserId
+    ]
+  )
+  return result.affectedRows > 0
+}
+
+export async function deleteKnowledgeBaseById(id: number, ownerUserId: string) {
+  await ensureKnowledgeSchema()
+  const result = await execute<ResultSetHeader>(
+    'DELETE FROM knowledge_bases WHERE id = ? AND owner_user_id = ?',
+    [id, ownerUserId]
+  )
+  return result.affectedRows > 0
 }
 
 export async function createKnowledgeDocument(input: KnowledgeDocumentInput) {
@@ -211,6 +267,34 @@ export async function findKnowledgeDocumentById(documentId: number, ownerUserId:
   )
 
   return rows[0] ?? null
+}
+
+export async function listKnowledgeDocumentsByBaseId(knowledgeBaseId: number, ownerUserId: string): Promise<KnowledgeDocumentRow[]>
+export async function listKnowledgeDocumentsByBaseId(
+  knowledgeBaseId: number,
+  ownerUserId: string,
+  pagination: PaginationOptions
+): Promise<PageResult<KnowledgeDocumentRow>>
+export async function listKnowledgeDocumentsByBaseId(knowledgeBaseId: number, ownerUserId: string, pagination?: PaginationOptions) {
+  await ensureKnowledgeSchema()
+  const sql = `SELECT d.id, d.knowledge_base_id, d.owner_user_id, d.filename, d.title, d.file_type, d.file_size,
+                      d.file_path, d.parse_status, d.chunk_count, d.created_at
+               FROM knowledge_documents d
+               INNER JOIN knowledge_bases b ON b.id = d.knowledge_base_id
+               WHERE d.knowledge_base_id = ? AND ${visibleKnowledgeBaseWhere('b')}
+               ORDER BY d.created_at DESC, d.id DESC`
+  const params = [knowledgeBaseId, ...visibleKnowledgeBaseParams(ownerUserId, 'b')]
+  if (!pagination) return query<KnowledgeDocumentRow[]>(sql, params)
+
+  const rows = await query<KnowledgeDocumentRow[]>(`${sql} LIMIT ? OFFSET ?`, [...params, pagination.pageSize, pagination.offset])
+  const totalRows = await query<(RowDataPacket & { total: number })[]>(
+    `SELECT COUNT(*) AS total
+     FROM knowledge_documents d
+     INNER JOIN knowledge_bases b ON b.id = d.knowledge_base_id
+     WHERE d.knowledge_base_id = ? AND ${visibleKnowledgeBaseWhere('b')}`,
+    params
+  )
+  return pageResult(rows, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 export async function deleteKnowledgeDocumentById(documentId: number, ownerUserId: string) {

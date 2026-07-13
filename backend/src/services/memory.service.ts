@@ -1,7 +1,8 @@
 import { createMemory, deleteMemory, listEnabledMemories, listMemories, updateMemory } from '../models/memory.model'
+import { PaginationOptions } from '../utils/pagination'
 
-export async function getMemories() {
-  return listMemories()
+export async function getMemories(pagination?: PaginationOptions) {
+  return pagination ? listMemories(pagination) : listMemories()
 }
 
 export async function getMemoriesForWorkflow() {

@@ -1,4 +1,5 @@
 import '../config/env'
+import { closePool } from '../config/db'
 import webSearchTool from '../tools/webSearch.tool'
 
 async function main() {
@@ -29,4 +30,6 @@ async function main() {
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : error)
   process.exitCode = 1
+}).finally(async () => {
+  await closePool()
 })

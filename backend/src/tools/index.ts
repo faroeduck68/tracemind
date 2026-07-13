@@ -12,6 +12,12 @@ import riskSummaryTool from './riskSummary.tool'
 import summaryLLMTool from './summaryLLM.tool'
 import userInputTool from './userInput.tool'
 import webSearchTool from './webSearch.tool'
+import resumeExtractTool from './resumeExtract.tool'
+import jobRequirementTool from './jobRequirement.tool'
+import candidateMatchTool from './candidateMatch.tool'
+import candidateRankTool from './candidateRank.tool'
+import recruitmentReportTool from './recruitmentReport.tool'
+import recruitmentReportOutputTool from './recruitmentReportOutput.tool'
 
 export const toolRegistry = {
   user_input: userInputTool,
@@ -28,6 +34,12 @@ export const toolRegistry = {
   finance_knowledge_base: knowledgeSearchTool,
   summary_llm: summaryLLMTool,
   web_search_tool: webSearchTool,
+  resume_extract_tool: resumeExtractTool,
+  job_requirement_tool: jobRequirementTool,
+  candidate_match_tool: candidateMatchTool,
+  candidate_rank_tool: candidateRankTool,
+  recruitment_report_tool: recruitmentReportTool,
+  recruitment_report_output_tool: recruitmentReportOutputTool,
   report_output: reportOutputTool
 }
 

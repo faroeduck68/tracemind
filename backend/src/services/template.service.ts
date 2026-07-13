@@ -1,7 +1,8 @@
 import { createTemplate, findTemplateById, listTemplates, markTemplateUsed } from '../models/template.model'
+import { PaginationOptions } from '../utils/pagination'
 
-export async function getTemplates() {
-  return listTemplates()
+export async function getTemplates(pagination?: PaginationOptions) {
+  return pagination ? listTemplates(pagination) : listTemplates()
 }
 
 export async function getTemplate(id: number) {

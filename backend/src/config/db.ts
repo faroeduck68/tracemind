@@ -22,6 +22,13 @@ export function getPool() {
   return pool
 }
 
+export async function closePool() {
+  if (!pool) return
+  const current = pool
+  pool = null
+  await current.end()
+}
+
 export async function query<T extends RowDataPacket[]>(sql: string, params: unknown[] = []) {
   const [rows] = await getPool().query<T>(sql, params as any[])
   return rows

@@ -1,6 +1,7 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { execute, query } from '../config/db'
 import { stringifyJson } from '../utils/json'
+import { pageResult, PaginationOptions, PageResult } from '../utils/pagination'
 
 export type TemplateRow = RowDataPacket & {
   id: number
@@ -27,12 +28,17 @@ export type TemplateInput = {
   workflow_json?: unknown
 }
 
-export async function listTemplates() {
-  return query<TemplateRow[]>(
-    `SELECT id, title, description, category, badge, is_official, workflow_json, view_count, like_count, use_count, starred_count, created_at, updated_at
-     FROM workflow_templates
-     ORDER BY is_official DESC, use_count DESC, updated_at DESC`
-  )
+export async function listTemplates(): Promise<TemplateRow[]>
+export async function listTemplates(pagination: PaginationOptions): Promise<PageResult<TemplateRow>>
+export async function listTemplates(pagination?: PaginationOptions) {
+  const sql = `SELECT id, title, description, category, badge, is_official, workflow_json, view_count, like_count, use_count, starred_count, created_at, updated_at
+               FROM workflow_templates
+               ORDER BY is_official DESC, use_count DESC, updated_at DESC`
+  if (!pagination) return query<TemplateRow[]>(sql)
+
+  const rows = await query<TemplateRow[]>(`${sql} LIMIT ? OFFSET ?`, [pagination.pageSize, pagination.offset])
+  const totalRows = await query<(RowDataPacket & { total: number })[]>('SELECT COUNT(*) AS total FROM workflow_templates')
+  return pageResult(rows, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 export async function findTemplateById(id: number) {

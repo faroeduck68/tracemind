@@ -13,9 +13,11 @@ import {
 } from '../services/tool.service'
 import { sendSuccess } from '../utils/response'
 import { getRequestUserId } from '../utils/requestUser'
+import { readPagination } from '../utils/pagination'
+import { readIdParam } from '../utils/requestParams'
 
-export async function listToolController(_req: Request, res: Response) {
-  return sendSuccess(res, await getTools())
+export async function listToolController(req: Request, res: Response) {
+  return sendSuccess(res, await getTools(readPagination(req.query) ?? undefined))
 }
 
 export async function getToolController(req: Request, res: Response) {
@@ -44,11 +46,11 @@ export async function createToolController(req: Request, res: Response) {
 }
 
 export async function updateToolController(req: Request, res: Response) {
-  return sendSuccess(res, await editTool(Number(req.params.id), req.body), 'Tool updated')
+  return sendSuccess(res, await editTool(readIdParam(req), req.body), 'Tool updated')
 }
 
 export async function toggleToolController(req: Request, res: Response) {
-  return sendSuccess(res, await switchTool(Number(req.params.id)), 'Tool toggled')
+  return sendSuccess(res, await switchTool(readIdParam(req)), 'Tool toggled')
 }
 
 export async function toolStatsController(_req: Request, res: Response) {

@@ -12,10 +12,11 @@ import { runDraftTool, runTool } from './toolRunner.service'
 import { createWorkflowContext } from './context.service'
 import { toolRegistry } from '../tools'
 import { env } from '../config/env'
+import { mapPageResult, PaginationOptions } from '../utils/pagination'
 
-export async function getTools() {
-  const rows = await listTools()
-  return rows.map(sanitizeTool)
+export async function getTools(pagination?: PaginationOptions) {
+  const rows = pagination ? await listTools(pagination) : await listTools()
+  return Array.isArray(rows) ? rows.map(sanitizeTool) : mapPageResult(rows, sanitizeTool)
 }
 
 export async function getTool(idOrName: string) {

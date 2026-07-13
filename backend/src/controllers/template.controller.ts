@@ -1,13 +1,15 @@
 import { Request, Response } from 'express'
 import { addTemplate, getTemplate, getTemplates, useTemplate } from '../services/template.service'
 import { sendSuccess } from '../utils/response'
+import { readPagination } from '../utils/pagination'
+import { readIdParam } from '../utils/requestParams'
 
-export async function listTemplateController(_req: Request, res: Response) {
-  return sendSuccess(res, await getTemplates())
+export async function listTemplateController(req: Request, res: Response) {
+  return sendSuccess(res, await getTemplates(readPagination(req.query) ?? undefined))
 }
 
 export async function getTemplateController(req: Request, res: Response) {
-  const template = await getTemplate(Number(req.params.id))
+  const template = await getTemplate(readIdParam(req))
   if (!template) {
     return sendSuccess(res, null, 'Template not found', 404)
   }
@@ -21,5 +23,5 @@ export async function createTemplateController(req: Request, res: Response) {
 }
 
 export async function useTemplateController(req: Request, res: Response) {
-  return sendSuccess(res, await useTemplate(Number(req.params.id)), 'Template used')
+  return sendSuccess(res, await useTemplate(readIdParam(req)), 'Template used')
 }

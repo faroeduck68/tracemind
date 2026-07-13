@@ -3,28 +3,35 @@ import path from 'path'
 import {
   createKnowledgeBase,
   createKnowledgeDocument,
+  deleteKnowledgeBaseById,
   deleteKnowledgeDocumentById,
   findDefaultKnowledgeBase,
   findKnowledgeBaseById,
+  findKnowledgeBaseByName,
   findKnowledgeDocumentById,
   listKnowledgeBases,
+  listKnowledgeDocumentsByBaseId,
   RetrievalMode,
-  searchKnowledgeChunks
+  searchKnowledgeChunks,
+  updateKnowledgeBaseById
 } from '../models/knowledge.model'
+import { PaginationOptions } from '../utils/pagination'
 
 const retrievalModes = new Set<RetrievalMode>(['keyword', 'fulltext', 'hybrid', 'vector'])
 const defaultQuery = '财务风险 资产负债率 经营现金流 盈利能力'
 
 export type KnowledgeSearchInput = {
   knowledgeBaseId?: number | null
+  knowledgeBaseName?: string | null
   query?: string
   topK?: number
   retrievalMode?: RetrievalMode
   userId?: string
 }
 
-export async function getKnowledgeBases(userId = 'default_user') {
-  return listKnowledgeBases(normalizeUserId(userId))
+export async function getKnowledgeBases(userId = 'default_user', pagination?: PaginationOptions) {
+  const normalizedUserId = normalizeUserId(userId)
+  return pagination ? listKnowledgeBases(normalizedUserId, pagination) : listKnowledgeBases(normalizedUserId)
 }
 
 export async function getKnowledgeBase(id: number, userId = 'default_user') {
@@ -34,6 +41,23 @@ export async function getKnowledgeBase(id: number, userId = 'default_user') {
 export async function addKnowledgeBase(input: Record<string, unknown>, userId = 'default_user') {
   const normalized = validateKnowledgeBaseInput(input, normalizeUserId(userId))
   return createKnowledgeBase(normalized)
+}
+
+export async function editKnowledgeBase(id: number, input: Record<string, unknown>, userId = 'default_user') {
+  const normalizedUserId = normalizeUserId(userId)
+  await requireKnowledgeBase(id, normalizedUserId)
+  const normalized = validateKnowledgeBaseInput(input, normalizedUserId)
+  const updated = await updateKnowledgeBaseById(id, normalizedUserId, normalized)
+  if (!updated) throw new Error('Knowledge base cannot be edited by current user')
+  return findKnowledgeBaseById(id, normalizedUserId)
+}
+
+export async function removeKnowledgeBase(id: number, userId = 'default_user') {
+  const normalizedUserId = normalizeUserId(userId)
+  await requireKnowledgeBase(id, normalizedUserId)
+  const deleted = await deleteKnowledgeBaseById(id, normalizedUserId)
+  if (!deleted) throw new Error('Knowledge base cannot be deleted by current user')
+  return { deleted: true }
 }
 
 export async function addKnowledgeDocument(knowledgeBaseId: number, input: Record<string, unknown>, userId = 'default_user') {
@@ -102,6 +126,14 @@ export async function getKnowledgeDocument(documentId: number, userId = 'default
   return findKnowledgeDocumentById(documentId, normalizeUserId(userId))
 }
 
+export async function getKnowledgeDocuments(knowledgeBaseId: number, userId = 'default_user', pagination?: PaginationOptions) {
+  await requireKnowledgeBase(knowledgeBaseId, userId)
+  const normalizedUserId = normalizeUserId(userId)
+  return pagination
+    ? listKnowledgeDocumentsByBaseId(knowledgeBaseId, normalizedUserId, pagination)
+    : listKnowledgeDocumentsByBaseId(knowledgeBaseId, normalizedUserId)
+}
+
 export async function deleteKnowledgeDocument(documentId: number, userId = 'default_user') {
   const deleted = await deleteKnowledgeDocumentById(documentId, normalizeUserId(userId))
   if (!deleted) throw new Error('Knowledge document not found')
@@ -115,6 +147,8 @@ export async function searchKnowledgeBase(input: KnowledgeSearchInput) {
   const explicitMode = normalizeRetrievalMode(input.retrievalMode)
   const knowledgeBase = input.knowledgeBaseId
     ? await findKnowledgeBaseById(Number(input.knowledgeBaseId), userId)
+    : readString(input.knowledgeBaseName)
+      ? await findKnowledgeBaseByName(readString(input.knowledgeBaseName), userId)
     : await findDefaultKnowledgeBase(userId)
 
   if (!knowledgeBase) {

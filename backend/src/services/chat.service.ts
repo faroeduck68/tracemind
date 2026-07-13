@@ -70,13 +70,8 @@ export async function sendChatMessage(input: {
     history
   })
   const explicitFiles = Array.isArray(input.files) ? input.files : []
-  const attachedFiles =
-    explicitFiles.length > 0
-      ? explicitFiles
-      : shouldUseRecentDocumentContext(message)
-        ? recentWorkflowContext.files
-        : []
-  const hasUploadedFiles = attachedFiles.length > 0 || Boolean(input.fileIds?.length)
+  const attachedFiles = explicitFiles
+  const hasUploadedFiles = explicitFiles.length > 0 || Boolean(input.fileIds?.length)
   const explicitWebSearch = hasExplicitWebSearchIntent(message)
 
   const weatherToolName = !hasUploadedFiles && isWeatherQuery(message) ? await findWeatherToolName() : ''
@@ -152,6 +147,47 @@ export async function sendChatMessage(input: {
       },
       workflowId: workflow.id,
       runId: run.runId
+    }
+  }
+
+  const recruitmentFollowUp = buildRecruitmentFollowUpAnswer(message, recentWorkflowContext.runOutput)
+  if (recruitmentFollowUp) {
+    const metadata = {
+      messageType: 'recruitment_follow_up',
+      workflowId: recentWorkflowContext.workflowId ?? null,
+      runId: recentWorkflowContext.runId ?? null,
+      files: recentWorkflowContext.files ?? []
+    }
+    const assistantMessageId = await createMessage({
+      conversationId,
+      role: 'assistant',
+      content: recruitmentFollowUp,
+      metadata,
+      model: 'recruitment-rules-v1',
+      sequence: assistantSequence
+    })
+    await updateConversationAfterMessage(conversationId, { lastMessage: recruitmentFollowUp, model: 'recruitment-rules-v1' })
+    return {
+      conversationId,
+      userMessage: {
+        id: userMessageId,
+        role: 'user',
+        content: message,
+        metadata: { messageType: 'user', workflowId: recentWorkflowContext.workflowId, runId: recentWorkflowContext.runId },
+        sequence: userSequence,
+        createdAt: new Date().toISOString()
+      },
+      assistantMessage: {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: recruitmentFollowUp,
+        metadata,
+        model: 'recruitment-rules-v1',
+        sequence: assistantSequence,
+        createdAt: new Date().toISOString()
+      },
+      workflowId: recentWorkflowContext.workflowId ?? null,
+      runId: recentWorkflowContext.runId ?? null
     }
   }
 
@@ -356,7 +392,7 @@ export async function sendChatMessage(input: {
       .map((item) => ({ role: item.role as 'user' | 'assistant', content: item.content }))
   ]
 
-  if (recentWorkflowContext.contextText && shouldUseRecentDocumentContext(message)) {
+  if (recentWorkflowContext.contextText && (input.runId || input.workflowId || shouldUseRecentDocumentContext(message))) {
     messages.splice(1, 0, {
       role: 'system',
       content: recentWorkflowContext.contextText
@@ -421,8 +457,8 @@ export async function sendChatMessage(input: {
 }
 
 function friendlyWebSearchError(message: string) {
-  if (message.includes('未配置搜索服务 Key')) {
-    return 'web_search_tool 未配置搜索服务 Key，请在后端 .env 中配置 Tavily/Brave/SerpAPI/Bing 任一搜索服务 Key。'
+  if (message.includes('未配置搜索服务')) {
+    return 'web_search_tool 未配置搜索服务，请在后端 .env 中配置 Tavily/Brave/SerpAPI/Bing/阿里云 OpenSearch 任一搜索服务。'
   }
   return message
 }
@@ -484,6 +520,10 @@ function firstString(...values: unknown[]) {
   return ''
 }
 
+function arrayText(value: unknown) {
+  return Array.isArray(value) ? value.map(String).filter(Boolean).join('、') : ''
+}
+
 function formatWeatherValue(value: unknown, unit: string) {
   const text = firstString(value)
   if (!text) return ''
@@ -514,13 +554,14 @@ async function buildRecentWorkflowContext(input: {
         : readFilesFromRun(run?.inputData)
 
   if (!run && !files.length) {
-    return { workflowId, runId, files, contextText: '' }
+    return { workflowId, runId, files, runOutput: null, contextText: '' }
   }
 
   return {
     workflowId: workflowId ?? run?.workflowId ?? null,
     runId,
     files,
+    runOutput: run?.outputData ?? null,
     contextText: [
       '以下是用户最近一次上传文件和工作流运行上下文。用户说“这篇报告 / 这个文件 / 刚才那个文档”时，必须优先基于这些内容回答；不要说没有看到文件。',
       `Workflow ID: ${workflowId ?? run?.workflowId ?? '-'}`,
@@ -532,6 +573,38 @@ async function buildRecentWorkflowContext(input: {
       .filter(Boolean)
       .join('\n\n')
   }
+}
+
+function buildRecruitmentFollowUpAnswer(message: string, output: unknown) {
+  const record = readRecord(output)
+  const rankings = Array.isArray(record?.rankings) ? record.rankings.filter((item) => item && typeof item === 'object') as Array<Record<string, unknown>> : []
+  if (rankings.length === 0) return ''
+  if (!/(为什么|多少分|评分|得分|排名|匹配|技能|学历|经验|推荐|候选人)/.test(message)) return ''
+
+  const selected = rankings.find((item) => {
+    const name = firstString(item.name)
+    return name && message.includes(name)
+  })
+
+  if (selected) {
+    const breakdown = readRecord(selected.scoreBreakdown)
+    const breakdownText = breakdown
+      ? `技能 ${firstString(breakdown.skills)} 分 + 学历 ${firstString(breakdown.education)} 分 + 经验 ${firstString(breakdown.experience)} 分 + 信息完整度 ${firstString(breakdown.completeness)} 分 + 加分技能 ${firstString(breakdown.preferredSkillsBonus)} 分 = ${firstString(breakdown.total)} 分`
+      : `总分 ${firstString(selected.score)} 分`
+    return [
+      `${firstString(selected.name)}的匹配分是 ${firstString(selected.score)} 分。`,
+      `评分构成：${breakdownText}。`,
+      `匹配技能：${arrayText(selected.matchedSkills) || '无'}。`,
+      `缺失技能：${arrayText(selected.missingSkills) || '无'}。`,
+      `工作经验：${firstString(selected.experienceYears) || '0'} 年；学历：${firstString(selected.education) || '未识别'}。`,
+      `最终建议：${firstString(selected.recommendation) || '暂无'}。`
+    ].join('\n')
+  }
+
+  if (/(排名|排序|候选人)/.test(message)) {
+    return ['本次候选人排名：', ...rankings.map((item) => `${item.rank}. ${item.name}：${item.score} 分，${item.recommendation}`)].join('\n')
+  }
+  return ''
 }
 
 function findLatestWorkflowRef(history: Awaited<ReturnType<typeof listRecentMessages>>) {

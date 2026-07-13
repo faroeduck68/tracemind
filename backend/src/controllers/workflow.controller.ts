@@ -12,6 +12,8 @@ import {
 import { runWorkflow, testWorkflowNode } from '../services/workflowExecutor.service'
 import { sendSuccess } from '../utils/response'
 import { getRequestUserId } from '../utils/requestUser'
+import { readPagination } from '../utils/pagination'
+import { readIdParam } from '../utils/requestParams'
 
 export async function generateWorkflowController(req: Request, res: Response) {
   const query = String(req.body?.query ?? '').trim()
@@ -27,16 +29,16 @@ export async function generateWorkflowController(req: Request, res: Response) {
   return sendSuccess(res, workflow, 'Workflow generated')
 }
 
-export async function listWorkflowController(_req: Request, res: Response) {
-  return sendSuccess(res, await getWorkflowList())
+export async function listWorkflowController(req: Request, res: Response) {
+  return sendSuccess(res, await getWorkflowList(readPagination(req.query) ?? undefined))
 }
 
-export async function listWorkflowHistoryController(_req: Request, res: Response) {
-  return sendSuccess(res, await getWorkflowHistory())
+export async function listWorkflowHistoryController(req: Request, res: Response) {
+  return sendSuccess(res, await getWorkflowHistory(readPagination(req.query) ?? undefined))
 }
 
 export async function listWorkflowRunsController(req: Request, res: Response) {
-  return sendSuccess(res, await getWorkflowRuns(Number(req.params.id)))
+  return sendSuccess(res, await getWorkflowRuns(readIdParam(req), readPagination(req.query) ?? undefined))
 }
 
 export async function listConversationWorkflowsController(req: Request, res: Response) {
@@ -45,11 +47,11 @@ export async function listConversationWorkflowsController(req: Request, res: Res
     return sendSuccess(res, null, 'conversation id is required', 400)
   }
 
-  return sendSuccess(res, await getConversationWorkflows(conversationId))
+  return sendSuccess(res, await getConversationWorkflows(conversationId, readPagination(req.query) ?? undefined))
 }
 
 export async function getWorkflowController(req: Request, res: Response) {
-  const workflow = await getWorkflow(Number(req.params.id))
+  const workflow = await getWorkflow(readIdParam(req))
   if (!workflow) {
     return sendSuccess(res, null, 'Workflow not found', 404)
   }
@@ -58,22 +60,23 @@ export async function getWorkflowController(req: Request, res: Response) {
 }
 
 export async function updateWorkflowController(req: Request, res: Response) {
-  const workflow = await updateWorkflow(Number(req.params.id), req.body)
+  const workflow = await updateWorkflow(readIdParam(req), req.body)
   return sendSuccess(res, workflow, 'Workflow updated')
 }
 
 export async function deleteWorkflowController(req: Request, res: Response) {
-  await removeWorkflow(Number(req.params.id))
-  return sendSuccess(res, { id: Number(req.params.id) }, 'Workflow deleted')
+  const id = readIdParam(req)
+  await removeWorkflow(id)
+  return sendSuccess(res, { id }, 'Workflow deleted')
 }
 
 export async function runWorkflowController(req: Request, res: Response) {
-  const result = await runWorkflow(Number(req.params.id), { ...(req.body ?? {}), userId: getRequestUserId(req) })
+  const result = await runWorkflow(readIdParam(req), { ...(req.body ?? {}), userId: getRequestUserId(req) })
   return sendSuccess(res, result, 'Workflow executed')
 }
 
 export async function testWorkflowNodeController(req: Request, res: Response) {
-  const workflowId = Number(req.params.id)
+  const workflowId = readIdParam(req)
   const nodeId = String(req.params.nodeId ?? '').trim()
   if (!nodeId) {
     return sendSuccess(res, null, 'nodeId is required', 400)

@@ -1,0 +1,11 @@
+姓名：王五
+学历：本科，信息管理专业
+工作经验：5年开发经验
+
+技能：Python、Django、Flask、MySQL、Docker、Linux。
+
+工作经历：
+2021年至今从事 Python Web 开发，负责数据管理平台和内部自动化工具。
+项目经历：使用 Django、MySQL 和 Docker 建设数据录入与分析平台。
+
+自我评价：有较完整的项目交付经验，希望转向 Java 后端开发方向。

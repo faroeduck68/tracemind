@@ -10,6 +10,7 @@ import { parseJson } from '../utils/json'
 import { hasExplicitWebSearchIntent, isWeatherQuery, needsRealtimeInformation } from './realtimeIntent.service'
 
 const financeKeywords = ['财报', '财务', '风险', '利润', '收入', '现金流']
+const recruitmentKeywords = ['简历', '候选人', '招聘', '岗位匹配', '人才筛选', '应聘', '职位匹配']
 // 触发严格线性财报报告模板（任务书 §10.2）的关键词。
 const linearReportKeywords = ['Word 报告', 'Word报告', '生成报告', '导出报告', '财报风险报告', 'word 报告', 'word报告']
 // 触发现有分支型财报模板（含知识检索 + 综合总结）的关键词。
@@ -42,7 +43,13 @@ const toolDisplayNames: Record<string, string> = {
   summary_llm: '总结模型',
   knowledge_search_tool: '知识检索工具',
   web_search_tool: '网页搜索工具',
-  report_output: '报告输出工具'
+  report_output: '报告输出工具',
+  resume_extract_tool: '简历信息提取工具',
+  job_requirement_tool: '岗位要求解析工具',
+  candidate_match_tool: '候选人匹配评分工具',
+  candidate_rank_tool: '候选人排序工具',
+  recruitment_report_tool: '招聘分析报告生成工具',
+  recruitment_report_output_tool: '招聘报告输出工具'
 }
 
 const candidateToolsByTool: Record<string, Array<{ name: string; score: number }>> = {
@@ -89,6 +96,35 @@ const candidateToolsByTool: Record<string, Array<{ name: string; score: number }
     { name: 'web_search_tool', score: 0.97 },
     { name: 'knowledge_search_tool', score: 0.58 },
     { name: 'summary_llm', score: 0.42 }
+  ],
+  resume_extract_tool: [
+    { name: 'resume_extract_tool', score: 0.98 },
+    { name: 'pdf_parse_tool', score: 0.72 },
+    { name: 'summary_llm', score: 0.58 }
+  ],
+  job_requirement_tool: [
+    { name: 'job_requirement_tool', score: 0.97 },
+    { name: 'intent_classifier', score: 0.65 },
+    { name: 'summary_llm', score: 0.55 }
+  ],
+  candidate_match_tool: [
+    { name: 'candidate_match_tool', score: 0.98 },
+    { name: 'candidate_rank_tool', score: 0.72 },
+    { name: 'summary_llm', score: 0.52 }
+  ],
+  candidate_rank_tool: [
+    { name: 'candidate_rank_tool', score: 0.98 },
+    { name: 'candidate_match_tool', score: 0.7 },
+    { name: 'summary_llm', score: 0.5 }
+  ],
+  recruitment_report_tool: [
+    { name: 'recruitment_report_tool', score: 0.97 },
+    { name: 'report_generate_tool', score: 0.64 },
+    { name: 'summary_llm', score: 0.58 }
+  ],
+  recruitment_report_output_tool: [
+    { name: 'recruitment_report_output_tool', score: 0.98 },
+    { name: 'report_output_tool', score: 0.7 }
   ]
 }
 
@@ -152,7 +188,10 @@ export async function generateWorkflowFromQuery(
   const documentClassification = files.length ? await classifyDocumentFiles(files) : null
 
   if (hasUploadedFiles) {
-    if (documentClassification?.type === 'financial' || wantsFinancialAnalysis(query)) {
+    if (wantsRecruitmentAnalysis(query)) {
+      graph = buildRecruitmentWorkflow(query, memories)
+      source = 'file_intent_recruitment_analysis'
+    } else if (documentClassification?.type === 'financial' || wantsFinancialAnalysis(query)) {
       graph = buildLinearFinanceWorkflow(query, memories)
       source = documentClassification?.type === 'financial' ? 'document_classifier' : 'file_intent_financial_analysis'
     } else {
@@ -219,6 +258,10 @@ function wantsDocumentSummary(query: string) {
 
 function wantsFinancialAnalysis(query: string) {
   return ['财务分析', '财报分析', '分析财报', '财务风险', '财务指标'].some((keyword) => query.includes(keyword))
+}
+
+function wantsRecruitmentAnalysis(query: string) {
+  return recruitmentKeywords.some((keyword) => query.includes(keyword))
 }
 
 function normalizeToolFields(graph: WorkflowGraph, availableTools: PlannerTool[] = []): WorkflowGraph {
@@ -668,6 +711,170 @@ function buildFinancialWorkflow(query: string, memories: unknown[]): WorkflowGra
       { id: 'e-knowledge-summary', source: 'knowledge', target: 'summary' },
       { id: 'e-summary-output', source: 'summary', target: 'output' },
       { id: 'e-risk-output', source: 'risk', target: 'output' }
+    ]
+  }
+}
+
+function buildRecruitmentWorkflow(query: string, memories: unknown[]): WorkflowGraph {
+  const nodes = withIdle([
+    {
+      id: 'start',
+      type: 'input',
+      label: '开始',
+      subLabel: '接收岗位要求与简历',
+      icon: 'CirclePlay',
+      position: { x: 80, y: 260 },
+      status: 'idle',
+      tone: 'green',
+      tool: 'user_input',
+      confidence: 0.99,
+      reason: '接收用户输入的岗位要求和多份候选人简历。'
+    },
+    {
+      id: 'intent',
+      type: 'intent',
+      label: '招聘意图识别',
+      subLabel: '确认简历筛选任务',
+      icon: 'Bot',
+      position: { x: 300, y: 260 },
+      status: 'idle',
+      tone: 'blue',
+      tool: 'intent_classifier',
+      confidence: 0.97,
+      reason: '确认当前任务属于招聘和候选人匹配分析。'
+    },
+    {
+      id: 'parse',
+      type: 'file_read',
+      label: '批量读取简历',
+      subLabel: '解析 PDF 与文本简历',
+      icon: 'Files',
+      position: { x: 520, y: 260 },
+      status: 'idle',
+      tone: 'green',
+      tool: 'pdf_parse_tool',
+      confidence: 0.96,
+      reason: '先将多份简历转换为可分析的真实文本。'
+    },
+    {
+      id: 'resume_extract',
+      type: 'resume_extract',
+      label: '简历信息提取',
+      subLabel: '提取学历、技能和经历',
+      icon: 'ContactRound',
+      position: { x: 740, y: 260 },
+      status: 'idle',
+      tone: 'cyan',
+      tool: 'resume_extract_tool',
+      confidence: 0.95,
+      reason: '将每份简历转换为统一的候选人结构化信息。'
+    },
+    {
+      id: 'job_requirement',
+      type: 'requirement_extract',
+      label: '岗位要求解析',
+      subLabel: '识别学历、年限和技能要求',
+      icon: 'ClipboardList',
+      position: { x: 960, y: 260 },
+      status: 'idle',
+      tone: 'blue',
+      tool: 'job_requirement_tool',
+      confidence: 0.95,
+      reason: '从用户描述中提取统一的岗位匹配标准。'
+    },
+    {
+      id: 'knowledge',
+      type: 'knowledge_search',
+      label: '招聘知识检索',
+      subLabel: '读取评分和合规规则',
+      icon: 'Database',
+      position: { x: 1180, y: 260 },
+      status: 'idle',
+      tone: 'violet',
+      tool: 'knowledge_search_tool',
+      confidence: 0.92,
+      reason: '使用招聘评估知识库补充评分方法和公平招聘约束。',
+      config: {
+        knowledgeBaseName: '招聘评估知识库',
+        retrievalMode: 'keyword',
+        topK: 5,
+        queryTemplate: '招聘 简历 候选人 岗位匹配 技能 学历 工作经验 公平评估'
+      }
+    },
+    {
+      id: 'match',
+      type: 'candidate_match',
+      label: '计算匹配度',
+      subLabel: '按统一规则评分',
+      icon: 'Gauge',
+      position: { x: 1400, y: 260 },
+      status: 'idle',
+      tone: 'amber',
+      tool: 'candidate_match_tool',
+      confidence: 0.95,
+      reason: '综合技能、学历、经验和信息完整度计算候选人匹配分。'
+    },
+    {
+      id: 'rank',
+      type: 'candidate_rank',
+      label: '候选人排序',
+      subLabel: '生成面试优先级',
+      icon: 'ListOrdered',
+      position: { x: 1620, y: 260 },
+      status: 'idle',
+      tone: 'amber',
+      tool: 'candidate_rank_tool',
+      confidence: 0.96,
+      reason: '根据匹配分生成可解释的候选人排名和建议。'
+    },
+    {
+      id: 'report',
+      type: 'report_generate',
+      label: '招聘报告生成',
+      subLabel: '汇总排名与匹配依据',
+      icon: 'FileChartColumn',
+      position: { x: 1840, y: 260 },
+      status: 'idle',
+      tone: 'violet',
+      tool: 'recruitment_report_tool',
+      confidence: 0.95,
+      reason: '将岗位要求、候选人排名和评分依据整理为 Markdown 报告。'
+    },
+    {
+      id: 'output',
+      type: 'output',
+      label: '输出分析结果',
+      subLabel: '返回招聘分析报告',
+      icon: 'FileOutput',
+      position: { x: 2060, y: 260 },
+      status: 'idle',
+      tone: 'green',
+      tool: 'recruitment_report_output_tool',
+      confidence: 0.98,
+      reason: '输出候选人排序、岗位要求和完整招聘分析报告。'
+    }
+  ])
+
+  return {
+    name: '多简历候选人匹配分析 Workflow',
+    description: '批量解析简历，提取候选人信息，依据岗位要求和招聘知识库完成评分、排序并生成招聘分析报告。',
+    sourceType: 'generated',
+    originalQuery: query,
+    intent: 'resume_screening',
+    workflowType: 'linear_recruitment_analysis',
+    confidence: 0.96,
+    status: 'draft',
+    nodes,
+    edges: [
+      { id: 'e-start-intent', source: 'start', target: 'intent' },
+      { id: 'e-intent-parse', source: 'intent', target: 'parse' },
+      { id: 'e-parse-resume', source: 'parse', target: 'resume_extract' },
+      { id: 'e-resume-job', source: 'resume_extract', target: 'job_requirement' },
+      { id: 'e-job-knowledge', source: 'job_requirement', target: 'knowledge' },
+      { id: 'e-knowledge-match', source: 'knowledge', target: 'match' },
+      { id: 'e-match-rank', source: 'match', target: 'rank' },
+      { id: 'e-rank-report', source: 'rank', target: 'report' },
+      { id: 'e-report-output', source: 'report', target: 'output' }
     ]
   }
 }

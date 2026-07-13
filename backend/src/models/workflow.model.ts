@@ -2,6 +2,7 @@ import { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { execute, query, withTransaction } from '../config/db'
 import { WorkflowEdge, WorkflowEdgeRow, WorkflowGraph, WorkflowNode, WorkflowNodeRow } from '../types/workflow'
 import { parseJson, stringifyJson } from '../utils/json'
+import { pageResult, PaginationOptions, PageResult } from '../utils/pagination'
 import { ensureWorkflowHistoryTables } from './workflowHistorySchema.model'
 
 export type WorkflowRow = RowDataPacket & {
@@ -154,13 +155,18 @@ async function insertEdges(connection: PoolConnection, workflowId: number, edges
   }
 }
 
-export async function listWorkflows() {
+export async function listWorkflows(): Promise<WorkflowRow[]>
+export async function listWorkflows(pagination: PaginationOptions): Promise<PageResult<WorkflowRow>>
+export async function listWorkflows(pagination?: PaginationOptions) {
   await ensureWorkflowHistoryTables()
-  return query<WorkflowRow[]>(
-    `SELECT id, name, description, source_type, original_query, intent, workflow_type, confidence, status, node_count, edge_count, workflow_json, conversation_id, created_at, updated_at
-     FROM workflows
-     ORDER BY updated_at DESC`
-  )
+  const sql = `SELECT id, name, description, source_type, original_query, intent, workflow_type, confidence, status, node_count, edge_count, workflow_json, conversation_id, created_at, updated_at
+               FROM workflows
+               ORDER BY updated_at DESC`
+  if (!pagination) return query<WorkflowRow[]>(sql)
+
+  const rows = await query<WorkflowRow[]>(`${sql} LIMIT ? OFFSET ?`, [pagination.pageSize, pagination.offset])
+  const totalRows = await query<(RowDataPacket & { total: number })[]>('SELECT COUNT(*) AS total FROM workflows')
+  return pageResult(rows, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 export async function findWorkflowById(id: number) {
@@ -202,10 +208,11 @@ export async function listEdgesByWorkflowId(workflowId: number) {
   )
 }
 
-export async function listWorkflowHistory() {
+export async function listWorkflowHistory(): Promise<WorkflowHistoryRow[]>
+export async function listWorkflowHistory(pagination: PaginationOptions): Promise<PageResult<WorkflowHistoryRow>>
+export async function listWorkflowHistory(pagination?: PaginationOptions) {
   await ensureWorkflowHistoryTables()
-  return query<WorkflowHistoryRow[]>(
-    `SELECT
+  const sql = `SELECT
        w.id,
        w.name,
        w.description,
@@ -236,13 +243,18 @@ export async function listWorkflowHistory() {
        ) latest ON latest.latest_run_id = wr.id
      ) r ON r.workflow_id = w.id
      ORDER BY w.updated_at DESC, w.id DESC`
-  )
+  if (!pagination) return query<WorkflowHistoryRow[]>(sql)
+
+  const rows = await query<WorkflowHistoryRow[]>(`${sql} LIMIT ? OFFSET ?`, [pagination.pageSize, pagination.offset])
+  const totalRows = await query<(RowDataPacket & { total: number })[]>('SELECT COUNT(*) AS total FROM workflows')
+  return pageResult(rows, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
-export async function listWorkflowsByConversationId(conversationId: string) {
+export async function listWorkflowsByConversationId(conversationId: string): Promise<WorkflowHistoryRow[]>
+export async function listWorkflowsByConversationId(conversationId: string, pagination: PaginationOptions): Promise<PageResult<WorkflowHistoryRow>>
+export async function listWorkflowsByConversationId(conversationId: string, pagination?: PaginationOptions) {
   await ensureWorkflowHistoryTables()
-  return query<WorkflowHistoryRow[]>(
-    `SELECT
+  const sql = `SELECT
        w.id,
        w.name,
        w.description,
@@ -273,9 +285,16 @@ export async function listWorkflowsByConversationId(conversationId: string) {
        ) latest ON latest.latest_run_id = wr.id
      ) r ON r.workflow_id = w.id
      WHERE w.conversation_id = ?
-     ORDER BY w.updated_at DESC, w.id DESC`,
-    [conversationId]
+     ORDER BY w.updated_at DESC, w.id DESC`
+  const params = [conversationId]
+  if (!pagination) return query<WorkflowHistoryRow[]>(sql, params)
+
+  const rows = await query<WorkflowHistoryRow[]>(`${sql} LIMIT ? OFFSET ?`, [...params, pagination.pageSize, pagination.offset])
+  const totalRows = await query<(RowDataPacket & { total: number })[]>(
+    'SELECT COUNT(*) AS total FROM workflows WHERE conversation_id = ?',
+    params
   )
+  return pageResult(rows, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 export function nodeRowToWorkflowNode(row: WorkflowNodeRow): WorkflowNode {

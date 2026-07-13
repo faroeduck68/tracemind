@@ -8,6 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "test:web-search": "tsx src/scripts/testWebSearch.ts",
     "test:workflow-routing": "tsx src/scripts/testWorkflowRouting.ts",
+    "db:seed-knowledge-demo": "tsx src/scripts/seedKnowledgeDemo.ts",
+    "db:seed-recruitment-demo": "tsx src/scripts/seedRecruitmentDemo.ts",
     "start": "node dist/server.js",
     "db:schema": "mysql -h %DB_HOST% -P %DB_PORT% -u %DB_USER% -p%DB_PASSWORD% %DB_NAME% < src/database/schema.sql",
     "db:seed": "mysql -h %DB_HOST% -P %DB_PORT% -u %DB_USER% -p%DB_PASSWORD% %DB_NAME% < src/database/seed.sql"
@@ -27,6 +29,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/morgan": "^1.9.9",
+    "@types/multer": "^2.2.0",
     "@types/node": "^22.10.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

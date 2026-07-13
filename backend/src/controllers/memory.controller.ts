@@ -1,9 +1,11 @@
 import { Request, Response } from 'express'
 import { addMemory, editMemory, getMemories, getMemoriesForWorkflow, removeMemory } from '../services/memory.service'
 import { sendSuccess } from '../utils/response'
+import { readPagination } from '../utils/pagination'
+import { readIdParam } from '../utils/requestParams'
 
-export async function listMemoryController(_req: Request, res: Response) {
-  return sendSuccess(res, await getMemories())
+export async function listMemoryController(req: Request, res: Response) {
+  return sendSuccess(res, await getMemories(readPagination(req.query) ?? undefined))
 }
 
 export async function createMemoryController(req: Request, res: Response) {
@@ -12,13 +14,15 @@ export async function createMemoryController(req: Request, res: Response) {
 }
 
 export async function updateMemoryController(req: Request, res: Response) {
-  await editMemory(Number(req.params.id), req.body)
-  return sendSuccess(res, { id: Number(req.params.id) }, 'Memory updated')
+  const id = readIdParam(req)
+  await editMemory(id, req.body)
+  return sendSuccess(res, { id }, 'Memory updated')
 }
 
 export async function deleteMemoryController(req: Request, res: Response) {
-  await removeMemory(Number(req.params.id))
-  return sendSuccess(res, { id: Number(req.params.id) }, 'Memory deleted')
+  const id = readIdParam(req)
+  await removeMemory(id)
+  return sendSuccess(res, { id }, 'Memory deleted')
 }
 
 export async function memoryForWorkflowController(_req: Request, res: Response) {

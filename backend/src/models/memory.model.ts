@@ -1,5 +1,6 @@
 import { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { execute, query } from '../config/db'
+import { pageResult, PaginationOptions, PageResult } from '../utils/pagination'
 
 export type MemoryRow = RowDataPacket & {
   id: number
@@ -27,12 +28,17 @@ export type MemoryInput = {
   enabled?: 0 | 1
 }
 
-export async function listMemories() {
-  return query<MemoryRow[]>(
-    `SELECT id, memory_type, title, content, importance, importance_score, source_type, source_id, enabled, last_used_at, created_at, updated_at
-     FROM memories
-     ORDER BY importance_score DESC, updated_at DESC`
-  )
+export async function listMemories(): Promise<MemoryRow[]>
+export async function listMemories(pagination: PaginationOptions): Promise<PageResult<MemoryRow>>
+export async function listMemories(pagination?: PaginationOptions) {
+  const sql = `SELECT id, memory_type, title, content, importance, importance_score, source_type, source_id, enabled, last_used_at, created_at, updated_at
+               FROM memories
+               ORDER BY importance_score DESC, updated_at DESC`
+  if (!pagination) return query<MemoryRow[]>(sql)
+
+  const rows = await query<MemoryRow[]>(`${sql} LIMIT ? OFFSET ?`, [pagination.pageSize, pagination.offset])
+  const totalRows = await query<(RowDataPacket & { total: number })[]>('SELECT COUNT(*) AS total FROM memories')
+  return pageResult(rows, Number(totalRows[0]?.total ?? 0), pagination)
 }
 
 export async function listEnabledMemories(limit = 5) {

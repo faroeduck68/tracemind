@@ -19,6 +19,7 @@ const knowledgeSearchTool: TraceMindTool = {
       fallbackQuery
     const result = await searchKnowledgeBase({
       knowledgeBaseId: readOptionalNumber(input.knowledgeBaseId ?? config?.knowledgeBaseId),
+      knowledgeBaseName: readString(input.knowledgeBaseName ?? config?.knowledgeBaseName),
       query,
       topK: readOptionalNumber(input.topK ?? config?.topK),
       retrievalMode: readString(input.retrievalMode ?? config?.retrievalMode) as RetrievalMode,

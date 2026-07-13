@@ -1,6 +1,6 @@
 import { TraceMindTool } from '../types/tool'
 
-type SearchProvider = 'tavily' | 'brave' | 'serpapi' | 'bing'
+type SearchProvider = 'tavily' | 'brave' | 'serpapi' | 'bing' | 'aliyun'
 
 type SearchResult = {
   title: string
@@ -40,7 +40,8 @@ const webSearchTool: TraceMindTool & { inputSchema: unknown; outputSchema: unkno
       return {
         success: false,
         output: null,
-        errorMessage: 'web_search_tool 未配置搜索服务 Key，请在后端 .env 中配置 Tavily/Brave/SerpAPI/Bing 任一搜索服务 Key。'
+        errorMessage:
+          'web_search_tool 未配置搜索服务，请在后端 .env 中配置 Tavily/Brave/SerpAPI/Bing/阿里云 OpenSearch 任一搜索服务。'
       }
     }
 
@@ -91,7 +92,8 @@ async function search(provider: SearchProvider, query: string): Promise<{ result
   if (provider === 'tavily') return searchTavily(query)
   if (provider === 'brave') return searchBrave(query)
   if (provider === 'serpapi') return searchSerpApi(query)
-  return searchBing(query)
+  if (provider === 'bing') return searchBing(query)
+  return searchAliyun(query)
 }
 
 async function searchTavily(query: string) {
@@ -155,6 +157,34 @@ async function searchBing(query: string) {
   }
 }
 
+async function searchAliyun(query: string) {
+  const url = resolveAliyunSearchUrl()
+  const response = await fetchJson(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.ALIYUN_OPENSEARCH_API_KEY ?? ''}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      query,
+      top_k: MAX_RESULTS
+    })
+  })
+  const record = readRecord(response)
+  const result = readRecord(record?.result) ?? readRecord(record?.data) ?? record
+  const rawResults =
+    readArray(result?.search_result).length > 0
+      ? readArray(result?.search_result)
+      : readArray(result?.results).length > 0
+        ? readArray(result?.results)
+        : readArray(result?.items)
+
+  return {
+    results: rawResults.map(normalizeAliyunResult),
+    summary: readString(result?.answer, result?.summary, result?.content)
+  }
+}
+
 async function fetchJson(url: string | URL, init: RequestInit = {}) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), readLimit('WEB_SEARCH_TIMEOUT_MS', 12000, 1000, 30000))
@@ -174,7 +204,7 @@ async function fetchJson(url: string | URL, init: RequestInit = {}) {
 
 function resolveProviderPlan() {
   const configured = String(process.env.WEB_SEARCH_PROVIDER ?? '').trim().toLowerCase()
-  const supported: SearchProvider[] = ['tavily', 'brave', 'serpapi', 'bing']
+  const supported: SearchProvider[] = ['tavily', 'brave', 'serpapi', 'bing', 'aliyun']
   const configuredProvider = supported.includes(configured as SearchProvider) ? (configured as SearchProvider) : null
   const ordered = configuredProvider ? [configuredProvider, ...supported.filter((provider) => provider !== configuredProvider)] : supported
   return {
@@ -188,6 +218,7 @@ function readProviderKey(provider: SearchProvider) {
   if (provider === 'brave') return process.env.BRAVE_SEARCH_API_KEY
   if (provider === 'serpapi') return process.env.SERPAPI_API_KEY
   if (provider === 'bing') return process.env.BING_SEARCH_API_KEY
+  if (provider === 'aliyun') return process.env.ALIYUN_OPENSEARCH_API_KEY
   return ''
 }
 
@@ -212,6 +243,27 @@ function normalizeResult(value: unknown, titleKey: string, urlKey: string, conte
     score: readNumber(record?.score),
     publishedAt: readString(record?.published_date, record?.datePublished, record?.age) || undefined
   }
+}
+
+function normalizeAliyunResult(value: unknown): SearchResult {
+  const record = readRecord(value)
+  return {
+    title: sanitizeText(readString(record?.title, record?.name)) || '未命名来源',
+    url: readPublicUrl(readString(record?.link, record?.url)),
+    content: sanitizeText(readString(record?.snippet, record?.content, record?.summary, record?.description)),
+    score: readNumber(record?.score),
+    publishedAt: readString(record?.published_at, record?.publishedAt, record?.date, record?.time) || undefined
+  }
+}
+
+function resolveAliyunSearchUrl() {
+  const endpoint = readString(process.env.ALIYUN_OPENSEARCH_ENDPOINT).replace(/\/+$/, '')
+  if (!endpoint) throw new Error('阿里云 OpenSearch 未配置 ALIYUN_OPENSEARCH_ENDPOINT。')
+
+  if (/\/v3\/openapi\/workspaces\//.test(endpoint)) return endpoint
+
+  const workspace = readString(process.env.ALIYUN_OPENSEARCH_WORKSPACE, 'default')
+  return `${endpoint}/v3/openapi/workspaces/${encodeURIComponent(workspace)}/web-search/ops-web-search-001`
 }
 
 function readPublicUrl(value: string) {

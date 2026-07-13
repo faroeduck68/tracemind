@@ -10,6 +10,7 @@ import {
 } from '../models/mcpServer.model'
 import { execute, query } from '../config/db'
 import { stringifyJson } from '../utils/json'
+import { mapPageResult, PaginationOptions } from '../utils/pagination'
 
 type McpToolDescriptor = {
   name?: unknown
@@ -22,8 +23,12 @@ type McpToolDescriptor = {
   output_schema?: unknown
 }
 
-export async function getMcpServers() {
-  const servers = await listMcpServers()
+export async function getMcpServers(pagination?: PaginationOptions) {
+  const servers = pagination ? await listMcpServers(pagination) : await listMcpServers()
+  if (!Array.isArray(servers)) {
+    const list = await Promise.all(servers.list.map(sanitizeMcpServerWithCount))
+    return mapPageResult({ ...servers, list }, (server) => server)
+  }
   return Promise.all(servers.map(sanitizeMcpServerWithCount))
 }
 
