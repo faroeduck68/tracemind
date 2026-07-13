@@ -10,6 +10,7 @@
     "test:workflow-routing": "tsx src/scripts/testWorkflowRouting.ts",
     "db:seed-knowledge-demo": "tsx src/scripts/seedKnowledgeDemo.ts",
     "db:seed-recruitment-demo": "tsx src/scripts/seedRecruitmentDemo.ts",
+    "db:seed-workflow-demo": "tsx src/scripts/seedWorkflowDemo.ts",
     "start": "node dist/server.js",
     "db:schema": "mysql -h %DB_HOST% -P %DB_PORT% -u %DB_USER% -p%DB_PASSWORD% %DB_NAME% < src/database/schema.sql",
     "db:seed": "mysql -h %DB_HOST% -P %DB_PORT% -u %DB_USER% -p%DB_PASSWORD% %DB_NAME% < src/database/seed.sql"

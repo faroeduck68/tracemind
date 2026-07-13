@@ -1,7 +1,11 @@
 -- TraceMind 主数据库：保存工作流、节点、运行记录、Trace、工具、知识库、记忆和设置。
+SET NAMES utf8mb4;
+
 CREATE DATABASE IF NOT EXISTS tracemind CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 USE tracemind;
+
+SET NAMES utf8mb4;
 
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,

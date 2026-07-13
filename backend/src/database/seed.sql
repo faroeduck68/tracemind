@@ -1,5 +1,7 @@
 USE tracemind;
 
+SET NAMES utf8mb4;
+
 INSERT INTO tools
 (name, display_name, `type`, version, category, description, enabled, risk_level, success_rate, avg_latency_ms, call_count)
 VALUES
