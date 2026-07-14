@@ -1,60 +1,61 @@
-# TraceMind Docker 启动说明
+# TraceMind Docker 数据库说明
 
-## 1. 准备环境变量
+当前 Docker Compose 只负责启动 MySQL 数据库。后端和前端使用本地开发命令启动，方便课程项目调试代码。
 
-Docker Compose 会读取 `backend/.env` 中的 DeepSeek 和阿里云配置。请确认至少包含：
-
-```env
-OPENAI_API_KEY=你的DeepSeekKey
-OPENAI_BASE_URL=https://api.deepseek.com
-OPENAI_MODEL=deepseek-chat
-
-WEB_SEARCH_PROVIDER=aliyun
-ALIYUN_OPENSEARCH_API_KEY=你的阿里云OpenSearchKey
-ALIYUN_OPENSEARCH_ENDPOINT=https://default-kr6f.platform-cn-shanghai.opensearch.aliyuncs.com
-ALIYUN_OPENSEARCH_WORKSPACE=default
-```
-
-这些 Key 不会写入镜像，只在容器启动时通过环境变量注入。
-
-## 2. 启动
+## 1. 启动数据库
 
 在项目根目录执行：
 
 ```powershell
-docker compose up --build
+docker compose up -d
 ```
 
-访问：
+默认连接信息：
 
 ```text
-前端：http://localhost:5173
-后端健康检查：http://localhost:4001/health
-MySQL：localhost:3307
+Host: 127.0.0.1
+Port: 3307
+User: root
+Password: 123456
+Database: tracemind
 ```
 
-首次启动时，MySQL 会自动执行：
+首次启动并创建数据卷时，MySQL 会自动执行：
 
 ```text
 backend/src/database/schema.sql
 backend/src/database/seed.sql
 ```
 
+## 2. 后端连接配置
+
+本地后端的 `backend/.env` 建议使用：
+
+```env
+DB_HOST=127.0.0.1
+DB_PORT=3307
+DB_USER=root
+DB_PASSWORD=123456
+DB_NAME=tracemind
+```
+
+DeepSeek 和阿里云 OpenSearch 的 Key 仍然只放在 `backend/.env`，不要提交到 GitHub。
+
 ## 3. 常用命令
 
-后台启动：
+查看状态：
 
 ```powershell
-docker compose up -d --build
+docker compose ps
 ```
 
-查看日志：
+查看 MySQL 日志：
 
 ```powershell
-docker compose logs -f backend
+docker compose logs -f mysql
 ```
 
-停止服务：
+停止数据库：
 
 ```powershell
 docker compose down
@@ -64,14 +65,24 @@ docker compose down
 
 ```powershell
 docker compose down -v
-docker compose up --build
+docker compose up -d
 ```
 
-## 4. 可选 Demo 数据
-
-如果需要重新写入招聘分析或知识库演示数据：
+进入 MySQL：
 
 ```powershell
-docker compose exec backend npm run db:seed-knowledge-demo
-docker compose exec backend npm run db:seed-recruitment-demo
+docker exec -it tracemind-mysql mysql -uroot -p123456 --default-character-set=utf8mb4 tracemind
 ```
+
+## 4. 补充 Demo 数据
+
+数据库容器启动后，在本地后端目录执行：
+
+```powershell
+cd backend
+npm run db:seed-knowledge-demo
+npm run db:seed-recruitment-demo
+npm run db:seed-workflow-demo
+```
+
+如果使用 Docker 数据库，执行这些脚本前请确认 `backend/.env` 中的 `DB_PORT=3307`。
